@@ -1,11 +1,13 @@
 # Status
 
-**Last updated: 2026-08-18 — Tasks 1–3 complete: hooked in and capturing the device.**
+**Last updated: 2026-08-18 — Tasks 1–3 complete; Task 4: the view matrix is found.**
 
-Task 3 added capture of the game's real Direct3D device and back-buffer
-(1280×720) from inside the Present hook — the handles the stereo rendering will
-use. Next is the big one: Task 4, the reverse-engineering hunt for the camera's
-view and projection matrices.
+The camera view matrix has been located — a 384-byte buffer the game refreshes
+every frame, with the view matrix 48 bytes in, confirmed from a 40k-snapshot
+gameplay capture ([06-camera-matrix.md](06-camera-matrix.md)). Still to do on
+Task 4: one more short capture (now set up to grab the whole buffer) to find the
+projection / combined view-projection matrix and confirm which one the shaders
+use — then we can start bending the camera per eye.
 
 ---
 
