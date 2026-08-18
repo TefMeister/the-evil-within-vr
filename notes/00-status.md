@@ -1,12 +1,20 @@
 # The Evil Within VR — Status
 
-Last updated: 2026-08-18 (session 1: FEASIBILITY SPIKE COMPLETE — verdict is
-**feasible**). We confirmed, on the running game under a debugger, that The
-Evil Within uses a Direct3D 11 renderer, that the id Tech developer console and
-cvar system survived Tango's modifications intact, and that the game loads at a
-fixed base address with no ASLR. No mod code has been written yet. The next
-step is to decompose the mod into staged sub-projects and design the first one
-(the stereo 6DOF core).
+Last updated: 2026-08-18 (session 1, later: STEREO 6DOF CORE DESIGN APPROVED).
+The mod is decomposed into five staged sub-projects. Sub-project 1 (the stereo
+6DOF core) has an approved design — see
+[design/2026-08-18-stereo-6dof-core-design.md](../design/2026-08-18-stereo-6dof-core-design.md).
+Approved decisions: proxy `dxgi.dll` + MinHook injection; true double-render
+stereo (not reprojection); OpenVR/SteamVR as the eventual runtime; and a first
+milestone scoped to **stereo correctness on the flat monitor** (head tracking
+and compositor submission deferred to sub-project 2). Next step: turn the design
+into an implementation plan. No mod code written yet.
+
+Earlier in session 1: FEASIBILITY SPIKE COMPLETE — verdict is **feasible**. We
+confirmed, on the running game under a debugger, that The Evil Within uses a
+Direct3D 11 renderer, that the id Tech developer console and cvar system
+survived Tango's modifications intact, and that the game loads at a fixed base
+address with no ASLR.
 
 ## Session 1 (2026-08-18): feasibility spike
 
