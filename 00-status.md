@@ -1,14 +1,16 @@
 # Status
 
-**Last updated: 2026-08-18 — Task 1 complete: the winmm proxy loads into the game.**
+**Last updated: 2026-08-18 — Task 2 complete: we're hooked into the renderer.**
 
-The stereo 6DOF core is being built from a 10-task plan. The first task is done:
-a proxy `winmm.dll` that forwards all 180 winmm exports gets our code running
-inside the game, confirmed live (the game reaches its title screen and our log
-file is written). The story of that task — including the "forward everything,
-not just the exe's imports" lesson — is in
-[04-proxy-loader.md](04-proxy-loader.md). Next up is hooking Direct3D 11 so we
-can start touching the rendering.
+The stereo 6DOF core is being built from a 10-task plan. Two tasks are done. Task
+1: a proxy `winmm.dll` that forwards all 180 winmm exports gets our code running
+inside the game ([04-proxy-loader.md](04-proxy-loader.md), including the "forward
+everything, not just the exe's imports" lesson). Task 2: a MinHook hook on
+Direct3D 11's `Present` — the end-of-frame call — obtained by borrowing the
+address from a throwaway swap-chain's vtable, now firing every frame on the
+game's render thread with the game responsive
+([05-present-hook.md](05-present-hook.md)). Next up: capturing the game's real
+device and back-buffer from inside the hook.
 
 Approach for the sub-project: inject via a proxy `winmm.dll` with MinHook (refined
 from `dxgi.dll` during planning), render the scene twice per frame with true
