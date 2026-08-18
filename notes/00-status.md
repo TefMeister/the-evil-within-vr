@@ -1,7 +1,15 @@
 # The Evil Within VR — Status
 
-Last updated: 2026-08-18 (session 1, later still: TASKS 1–3 COMPLETE — hooked in
-and capturing the device). The stereo 6DOF core is being implemented from its
+Last updated: 2026-08-18 (session 1, later still: TASKS 1–3 COMPLETE; TASK 4 —
+VIEW MATRIX FOUND). The camera view matrix is located: a 384-byte double-buffered
+dynamic constant buffer, view at byte offset 48, row-major 3×4 affine — confirmed
+from a 40k-record gameplay capture where its rotation tracked the camera pan and
+its translation tracked movement (only 2 of 40,000 windows matched). See
+[notes/06-camera-matrix-discovery.md](06-camera-matrix-discovery.md). **Still
+open on Task 4:** the projection / combined view-projection matrix (beyond byte
+128, not yet captured) — needs one more full-buffer gameplay capture (tooling now
+widened to 512 bytes) to find it and confirm which matrix the shaders consume
+before the per-eye override (Task 6). The stereo 6DOF core is being implemented from its
 [plan](../plans/2026-08-18-stereo-6dof-core-plan.md) (10 tasks). **Tasks 1–3 are
 done.** Task 1: a proxy `winmm.dll` that forwards all 180 winmm exports and loads
 our code into the game ([notes/04-proxy-loader.md](04-proxy-loader.md)). Task 2:
