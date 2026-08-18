@@ -35,6 +35,7 @@ this project.
 | x64dbg-skills (reverse-engineering skill guides) | dariushoule (Darius Houle) | https://github.com/dariushoule/x64dbg-skills |
 | Superpowers (skills framework used during development) | Jesse Vincent (GitHub: obra) and contributors at Prime Radiant | https://github.com/obra/superpowers |
 | The Evil Within debug-console documentation (launch options and commands) | The Evil Within Wiki (Fandom) contributors; PC Gamer; GameSpot; G15Tools | https://theevilwithin.fandom.com/wiki/Console_commands |
+| MinHook (function-hooking library) | Tsuda Kageyu (TsudaKageyu) and contributors | https://github.com/TsudaKageyu/minhook |
 | AI development assistance | Claude (Anthropic) | https://www.anthropic.com |
 
 Project lead and author: **TefMeister**.
