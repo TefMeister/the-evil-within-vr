@@ -4,6 +4,7 @@
 #include "MinHook.h"
 #include "minhook_glue.h"
 #include "log.h"
+#include "d3d_capture.h"
 
 Present_t g_present_orig = NULL;
 
@@ -11,6 +12,13 @@ static UINT64 g_frame = 0;
 static int g_hooks_active = 0;
 
 static HRESULT STDMETHODCALLTYPE Hook_Present(IDXGISwapChain *sc, UINT sync, UINT flags) {
+    if (!d3d_capture_ready()) {
+        /* First-Present-only; d3d_capture_from_present() is itself a no-op
+         * once ready, but the ready-check here avoids the call overhead on
+         * every subsequent frame. */
+        d3d_capture_from_present(sc);
+    }
+
     if ((g_frame++ % 120) == 0) {
         log_msg("Present hook alive: frame %llu", (unsigned long long)g_frame);
     }
