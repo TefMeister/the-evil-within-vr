@@ -60,5 +60,21 @@ MinHook (Tsuda Kageyu) is vendored under `third_party/minhook/` with its
 licence. It is plain C with no MSVC-only intrinsics, so it builds cleanly under
 the llvm-mingw toolchain with no source changes. It is credited in CREDITS.
 
+## Capturing the device and back-buffer (Task 3)
+
+With the `Present` hook in place, the next step was to grab the game's real
+Direct3D objects from inside it, on the first hooked frame: the swap-chain
+(passed to the hook), and from it the `ID3D11Device`, the immediate
+`ID3D11DeviceContext`, and the back-buffer description. These are stored in a
+`D3DCapture` struct that the stereo rendering will later draw with, and a
+`d3d_capture_ready()` flag guards their use.
+
+Captured live at the title screen: **1280×720, `DXGI_FORMAT_R8G8B8A8_UNORM`**
+(the game's back-buffer as launched windowed on the dev machine). The capture
+runs exactly once, on the first `Present`, and every failure path leaves the
+ready flag false while the hook still calls straight through to the game — the
+same fail-safe posture as everywhere else. `IID_ID3D11Device` (needed to ask the
+swap-chain for its device) is provided by linking the `dxguid` library.
+
 No game files were read, copied, or modified. The only file placed in the game
 folder is our own `winmm.dll`.
