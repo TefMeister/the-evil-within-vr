@@ -45,9 +45,9 @@ static int g_cb_total_records = 0;
 static int g_cb_capped = 0;
 static int g_table_full_warned = 0;
 
-#define CBDUMP_MAX_RECORDS 600
-#define CBDUMP_MAX_MS      20000
-#define CBDUMP_MAX_PER_SEC 4
+#define CBDUMP_MAX_RECORDS 40000
+#define CBDUMP_MAX_MS      600000
+#define CBDUMP_MAX_PER_SEC 20
 
 /* Fixed table tracking currently-mapped candidate buffers, keyed by
  * resource pointer, so Unmap can find the data Map exposed (pData becomes
@@ -198,7 +198,7 @@ static int throttle_allow_locked(UINT byteWidth) {
 }
 
 static void write_matrix_rows_locked(const void *data, UINT byteWidth) {
-    UINT dumpBytes = (byteWidth < 128) ? byteWidth : 128;
+    UINT dumpBytes = (byteWidth < 512) ? byteWidth : 512;
     UINT nFloats = dumpBytes / 4;
     const float *f = (const float *)data;
     UINT row;
