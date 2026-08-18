@@ -1,14 +1,21 @@
 # The Evil Within VR — Status
 
-Last updated: 2026-08-18 (session 1, later: STEREO 6DOF CORE DESIGN APPROVED).
-The mod is decomposed into five staged sub-projects. Sub-project 1 (the stereo
-6DOF core) has an approved design — see
+Last updated: 2026-08-18 (session 1, later still: TASK 1 COMPLETE — the winmm
+proxy loader works). The stereo 6DOF core is being implemented from its
+[plan](../plans/2026-08-18-stereo-6dof-core-plan.md) (10 tasks). **Task 1 is
+done:** a proxy `winmm.dll` that forwards all 180 winmm exports and loads our
+code into the game, confirmed live (the game reaches its title screen and our
+log file is written). See [notes/04-proxy-loader.md](04-proxy-loader.md). Next:
+Task 2, the MinHook `Present` hook. Mod code lives in the `the-evil-within-vr-mod`
+repo (push-gated; local commits only until release).
+
+The approved design is at
 [design/2026-08-18-stereo-6dof-core-design.md](../design/2026-08-18-stereo-6dof-core-design.md).
-Approved decisions: proxy `dxgi.dll` + MinHook injection; true double-render
-stereo (not reprojection); OpenVR/SteamVR as the eventual runtime; and a first
-milestone scoped to **stereo correctness on the flat monitor** (head tracking
-and compositor submission deferred to sub-project 2). Next step: turn the design
-into an implementation plan. No mod code written yet.
+Approved decisions: proxy `winmm.dll` loader + MinHook injection (refined from
+`dxgi.dll` during planning); true double-render stereo (not reprojection);
+OpenVR/SteamVR as the eventual runtime; and a first milestone scoped to
+**stereo correctness on the flat monitor** (head tracking and compositor
+submission deferred to sub-project 2).
 
 Earlier in session 1: FEASIBILITY SPIKE COMPLETE — verdict is **feasible**. We
 confirmed, on the running game under a debugger, that The Evil Within uses a
