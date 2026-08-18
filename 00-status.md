@@ -1,14 +1,21 @@
 # Status
 
-**Last updated: 2026-08-18 — stereo 6DOF core design approved.**
+**Last updated: 2026-08-18 — Task 1 complete: the winmm proxy loads into the game.**
 
-Sub-project 1 (the stereo 6DOF core) now has an approved design. The plan:
-inject via a proxy `dxgi.dll` with MinHook, render the scene twice per frame
-with true geometry (not depth reprojection), and — for the first milestone —
-present it side-by-side on the flat monitor to prove stereo correctness before
-adding head tracking and OpenVR compositor submission (those are sub-project 2).
-The full design lives in the dev-archive repo. Next step is turning it into an
-implementation plan. No mod code has been written yet.
+The stereo 6DOF core is being built from a 10-task plan. The first task is done:
+a proxy `winmm.dll` that forwards all 180 winmm exports gets our code running
+inside the game, confirmed live (the game reaches its title screen and our log
+file is written). The story of that task — including the "forward everything,
+not just the exe's imports" lesson — is in
+[04-proxy-loader.md](04-proxy-loader.md). Next up is hooking Direct3D 11 so we
+can start touching the rendering.
+
+Approach for the sub-project: inject via a proxy `winmm.dll` with MinHook (refined
+from `dxgi.dll` during planning), render the scene twice per frame with true
+geometry (not depth reprojection), and — for the first milestone — present it
+side-by-side on the flat monitor to prove stereo correctness before adding head
+tracking and OpenVR compositor submission (those are sub-project 2). The full
+design and plan live in the dev-archive repo.
 
 ---
 
