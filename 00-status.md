@@ -1,6 +1,18 @@
 # Status
 
-**Last updated: 2026-08-18 — feasibility spike complete, verdict: feasible.**
+**Last updated: 2026-08-18 — stereo 6DOF core design approved.**
+
+Sub-project 1 (the stereo 6DOF core) now has an approved design. The plan:
+inject via a proxy `dxgi.dll` with MinHook, render the scene twice per frame
+with true geometry (not depth reprojection), and — for the first milestone —
+present it side-by-side on the flat monitor to prove stereo correctness before
+adding head tracking and OpenVR compositor submission (those are sub-project 2).
+The full design lives in the dev-archive repo. Next step is turning it into an
+implementation plan. No mod code has been written yet.
+
+---
+
+**Earlier: feasibility spike complete, verdict: feasible.**
 
 We spent one session answering a single question before committing to anything:
 *can The Evil Within be brought into VR at all, and by which route?* The answer
