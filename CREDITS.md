@@ -26,6 +26,7 @@ this project.
 | Source / Work | Creator(s) | Link |
 |---|---|---|
 | REFramework / UEVR (D3D VR-injection methodology and reference) | praydog | https://github.com/praydog |
+| MinHook (function-hooking library) | Tsuda Kageyu (TsudaKageyu) and contributors | https://github.com/TsudaKageyu/minhook |
 | R.E.A.L. VR mods (alternate-eye D3D injection approach, inspiration) | Luke Ross | https://www.patreon.com/realvr |
 | vorpX (VR injection driver; the only prior VR route for this game, via its Z3D profile) | Ralf Ostertag / Animation Labs | https://www.vorpx.com |
 | OpenVR / SteamVR (VR runtime and compositor target) | Valve | https://github.com/ValveSoftware/openvr |
