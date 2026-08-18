@@ -6,8 +6,9 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved) {
     (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(inst);
-        winmm_forward_init();   /* resolve real winmm first, so forwards work immediately */
-        log_init();
+        log_init();              /* logger up first, so winmm_forward_init()'s own
+                                     failure diagnostics (log_msg calls) are never lost */
+        winmm_forward_init();    /* resolve real winmm */
         log_msg("TEWVR winmm proxy attached (pid=%lu)", GetCurrentProcessId());
     } else if (reason == DLL_PROCESS_DETACH) {
         log_msg("TEWVR winmm proxy detaching");
