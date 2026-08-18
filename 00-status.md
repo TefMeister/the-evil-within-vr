@@ -1,6 +1,14 @@
 # Status
 
-**Last updated: 2026-08-18 — Task 2 complete: we're hooked into the renderer.**
+**Last updated: 2026-08-18 — Tasks 1–3 complete: hooked in and capturing the device.**
+
+Task 3 added capture of the game's real Direct3D device and back-buffer
+(1280×720) from inside the Present hook — the handles the stereo rendering will
+use. Next is the big one: Task 4, the reverse-engineering hunt for the camera's
+view and projection matrices.
+
+---
+
 
 The stereo 6DOF core is being built from a 10-task plan. Two tasks are done. Task
 1: a proxy `winmm.dll` that forwards all 180 winmm exports gets our code running
