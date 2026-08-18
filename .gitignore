@@ -1,0 +1,34 @@
+# Never commit game files or binaries — this repo stores only files we create.
+# Game executables, assets, and archives
+*.exe
+*.dll
+*.bin
+*.bik
+*.pak
+*.wad
+*.megatexture
+*.vt
+*.streamdb
+*.resources
+*.tga
+*.dds
+*.bimage
+*.md6
+*.bmodel
+*.lwo
+*.mtr
+# Extracted or dumped memory / process data
+*.dmp
+*.dump
+*.raw
+# Build output (our own compiled artifacts — rebuilt from source, not tracked)
+build/
+*.o
+*.obj
+*.exp
+*.lib
+# Note: our own winmm.dll build artifact is git-ignored (it lives under build/).
+# The real system winmm.dll is NEVER copied into this repo.
+# Local scratch / coordination
+.superpowers/
+*.log
