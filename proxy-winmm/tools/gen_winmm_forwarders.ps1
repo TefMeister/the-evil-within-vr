@@ -1,0 +1,197 @@
+<#
+.SYNOPSIS
+    Generates the proxy-winmm winmm_forward.{h,c,s} + winmm.def sources by
+    enumerating EVERY named export of the real system winmm.dll and emitting
+    an assembly jump-thunk forwarder for each one.
+
+.DESCRIPTION
+    Earlier revisions of this generator forwarded only the handful of winmm
+    functions EvilWithin.exe itself imports. That turned out to be
+    insufficient: other modules the game loads (e.g. bink2w64.dll, used for
+    Bink video/audio) ALSO import functions from winmm.dll (for example
+    waveOutPrepareHeader), and a proxy DLL must export everything any loaded
+    module might need - not just what the main exe imports - otherwise the
+    OS loader aborts process initialisation with "Entry Point Not Found"
+    before any DllMain (including ours) ever runs.
+
+    So this generator forwards ALL ~180 named exports of the real
+    C:\Windows\System32\winmm.dll. Hand-writing correct C prototypes for all
+    of them is impractical, so instead of typed C wrapper functions we
+    generate raw assembly trampolines: each exported name is a tiny
+    x86-64 stub that does
+
+        jmp *ptr_NAME(%rip)
+
+    which is a tail jump through a resolved function-pointer slot. Because
+    `jmp` never touches the stack or any register, the original caller's
+    arguments (in registers/stack per the Windows x64 calling convention)
+    and return address are passed through completely untouched - this needs
+    no knowledge of each function's signature and works uniformly for all
+    exports, including ones with unusual calling patterns.
+
+    Output (all written to proxy-winmm/src/):
+      - winmm_forward.h: declares `void winmm_forward_init(void);`
+      - winmm_forward.c: one `static ... stub_NAME(void)` fallback per
+        export (logs via log_msg and returns 0 - never crashes) plus
+        `void *ptr_NAME = (void*)stub_NAME;` for each, and
+        winmm_forward_init(), which LoadLibraryW's the real system
+        winmm.dll (absolute System32 path - never copied/shipped) and
+        GetProcAddress-resolves every pointer, leaving the safe stub in
+        place for anything that fails to resolve.
+      - winmm_forward.s: the `.globl NAME` / `jmp *ptr_NAME(%rip)` thunk for
+        every export.
+      - winmm.def: an EXPORTS section listing every export name, passed to
+        the linker so the built DLL actually re-exports them all (raw
+        assembly labels are not auto-exported the way
+        __declspec(dllexport) functions are).
+
+.PARAMETER SystemWinmm
+    Real system winmm.dll whose export *names* are read to build the
+    forwarder list. Never copied or redistributed - the generated code
+    resolves it at runtime via an absolute LoadLibraryW path.
+#>
+param(
+    [string]$SystemWinmm = "C:\Windows\System32\winmm.dll"
+)
+
+$ErrorActionPreference = "Stop"
+
+function Get-WinmmExports {
+    param([string]$DllPath)
+
+    $objdump = Get-Command llvm-objdump -ErrorAction SilentlyContinue
+    if (-not $objdump) {
+        throw "llvm-objdump not found on PATH (expected next to gcc in llvm-mingw's bin dir)."
+    }
+
+    $lines = & llvm-objdump -p $DllPath 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "llvm-objdump -p failed on $DllPath"
+    }
+
+    $named = New-Object System.Collections.Generic.List[string]
+    $unnamedCount = 0
+    $inExportTable = $false
+
+    foreach ($line in $lines) {
+        if ($line -match '^\s*Export Table:\s*$') { $inExportTable = $true; continue }
+        if (-not $inExportTable) { continue }
+        if ($line -match '^\s*Ordinal\s+RVA\s+Name\s*$') { continue }
+        if ($line -match '^\s*DLL name:') { continue }
+        if ($line -match '^\s*Ordinal base:') { continue }
+        if ($line -match '^\s*$') { continue }
+        if ($line -match '^\s*\d+\s+0x[0-9a-fA-F]+\s+(\S+)\s*$') {
+            $named.Add($matches[1])
+        } elseif ($line -match '^\s*\d+\s+0x[0-9a-fA-F]+\s*$') {
+            # ordinal-only export, no name - we cannot re-export it by name.
+            $unnamedCount++
+        }
+    }
+
+    return [pscustomobject]@{ Named = $named; UnnamedCount = $unnamedCount }
+}
+
+Write-Host "Enumerating named exports of: $SystemWinmm"
+$exports = Get-WinmmExports -DllPath $SystemWinmm
+
+if ($exports.Named.Count -eq 0) {
+    throw "No named exports found in $SystemWinmm - nothing to forward."
+}
+
+Write-Host "Found $($exports.Named.Count) named export(s), $($exports.UnnamedCount) unnamed/ordinal-only (skipped)."
+
+# De-duplicate defensively (should not happen for a real winmm.dll, but keep
+# the generator robust).
+$names = $exports.Named | Sort-Object -Unique
+
+$srcDir = Join-Path (Split-Path -Parent $PSScriptRoot) "src"
+New-Item -ItemType Directory -Force $srcDir | Out-Null
+
+# ---------------------------------------------------------------------------
+# winmm_forward.h
+# ---------------------------------------------------------------------------
+$hLines = New-Object System.Collections.Generic.List[string]
+$hLines.Add("#pragma once")
+$hLines.Add("")
+$hLines.Add("/* GENERATED by tools/gen_winmm_forwarders.ps1 - do not edit by hand. */")
+$hLines.Add("/* Forwards every named export of the real winmm.dll via assembly thunks")
+$hLines.Add(" * (see winmm_forward.s / winmm.def). */")
+$hLines.Add("")
+$hLines.Add("/* Loads the real system winmm.dll and resolves every forwarded pointer. */")
+$hLines.Add("void winmm_forward_init(void);")
+$hLines.Add("")
+Set-Content -Path (Join-Path $srcDir "winmm_forward.h") -Value $hLines -Encoding ASCII
+
+# ---------------------------------------------------------------------------
+# winmm_forward.c
+# ---------------------------------------------------------------------------
+$cLines = New-Object System.Collections.Generic.List[string]
+$cLines.Add("/* GENERATED by tools/gen_winmm_forwarders.ps1 - do not edit by hand. */")
+$cLines.Add('#include <windows.h>')
+$cLines.Add('#include "winmm_forward.h"')
+$cLines.Add('#include "log.h"')
+$cLines.Add("")
+$cLines.Add("/* Each ptr_NAME slot is what the matching assembly thunk in winmm_forward.s")
+$cLines.Add(" * `jmp *ptr_NAME(%rip)`s through. Defaulted to a safe logging stub so a")
+$cLines.Add(" * call before winmm_forward_init() (or to a name the real DLL somehow")
+$cLines.Add(" * lacks) logs instead of crashing. */")
+$cLines.Add("")
+foreach ($n in $names) {
+    $cLines.Add("static DWORD_PTR stub_$n(void) {")
+    $cLines.Add("    log_msg(""winmm proxy: %s not resolved from real winmm.dll - returning 0"", ""$n"");")
+    $cLines.Add("    return 0;")
+    $cLines.Add("}")
+    $cLines.Add("void *ptr_$n = (void*)stub_$n;")
+    $cLines.Add("")
+}
+$cLines.Add("static HMODULE g_real_winmm = NULL;")
+$cLines.Add("")
+$cLines.Add("void winmm_forward_init(void) {")
+$cLines.Add('    g_real_winmm = LoadLibraryW(L"C:\\Windows\\System32\\winmm.dll");')
+$cLines.Add("    if (!g_real_winmm) {")
+$cLines.Add('        log_msg("winmm proxy: FAILED to LoadLibraryW the real system winmm.dll (gle=%lu)", GetLastError());')
+$cLines.Add('        return; /* every export stays on its safe logging stub */')
+$cLines.Add("    }")
+$cLines.Add("    void *p;")
+foreach ($n in $names) {
+    $cLines.Add("    p = GetProcAddress(g_real_winmm, ""$n""); if (p) ptr_$n = p;")
+}
+$cLines.Add("}")
+$cLines.Add("")
+Set-Content -Path (Join-Path $srcDir "winmm_forward.c") -Value $cLines -Encoding ASCII
+
+# ---------------------------------------------------------------------------
+# winmm_forward.s
+# ---------------------------------------------------------------------------
+$sLines = New-Object System.Collections.Generic.List[string]
+$sLines.Add("# GENERATED by tools/gen_winmm_forwarders.ps1 - do not edit by hand.")
+$sLines.Add("# One transparent tail-jump trampoline per forwarded winmm export.")
+$sLines.Add("# `jmp *ptr_NAME(%rip)` transfers control through the resolved real")
+$sLines.Add("# function pointer without touching the stack or any register, so the")
+$sLines.Add("# original caller's arguments and return address pass through untouched")
+$sLines.Add("# regardless of the target function's real signature.")
+$sLines.Add("    .text")
+foreach ($n in $names) {
+    $sLines.Add("    .globl $n")
+    $sLines.Add("    .p2align 4, 0x90")
+    $sLines.Add("${n}:")
+    $sLines.Add("    jmp *ptr_$n(%rip)")
+    $sLines.Add("")
+}
+Set-Content -Path (Join-Path $srcDir "winmm_forward.s") -Value $sLines -Encoding ASCII
+
+# ---------------------------------------------------------------------------
+# winmm.def
+# ---------------------------------------------------------------------------
+$defLines = New-Object System.Collections.Generic.List[string]
+$defLines.Add("LIBRARY winmm.dll")
+$defLines.Add("EXPORTS")
+foreach ($n in $names) {
+    $defLines.Add("    $n")
+}
+Set-Content -Path (Join-Path $srcDir "winmm.def") -Value $defLines -Encoding ASCII
+
+Write-Host ""
+Write-Host "Wrote winmm_forward.h, winmm_forward.c, winmm_forward.s, winmm.def to $srcDir"
+Write-Host "Forwarding $($names.Count) winmm.dll export(s)."
+
