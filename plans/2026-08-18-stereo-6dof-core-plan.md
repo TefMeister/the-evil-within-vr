@@ -6,7 +6,7 @@
 
 **Architecture:** A `winmm.dll` proxy placed next to the game loads our code past the Steam DRM (which unwraps before our DLL loads). From there, MinHook installs trampoline hooks on the D3D11/DXGI methods we need — obtained by momentarily creating a throwaway device/swapchain to read their vtables. We intercept the camera view/projection constant-buffer upload, then drive a true double-render (real geometry, twice) into the left and right halves of the back-buffer.
 
-**Tech Stack:** C (C11), MinHook (trampoline hooking, MIT-licensed, by Tsuda Kageyu), Direct3D 11 / DXGI (Windows SDK), MSVC (`cl.exe`, from Visual Studio Build Tools), PowerShell build script. Output artifact: `winmm.dll`.
+**Tech Stack:** C (C11), MinHook (trampoline hooking, MIT-licensed, by Tsuda Kageyu), Direct3D 11 / DXGI. Compiler: **llvm-mingw** (clang/gcc, UCRT, x86_64) — already installed on this PC at `%LOCALAPPDATA%\Microsoft\WinGet\Packages\MartinStorsjo.LLVM-MinGW.UCRT_...\llvm-mingw-*-ucrt-x86_64\bin` and on PATH as `gcc`; it ships the DirectX headers (`d3d11.h`, `dxgi.h`). MSVC `cl.exe` is a valid alternative but the C++ workload is not currently installed. PowerShell build script. Output artifact: `winmm.dll` (64-bit).
 
 **Spec:** `dev-archive/design/2026-08-18-stereo-6dof-core-design.md`
 
@@ -71,11 +71,15 @@ Boot our DLL inside the game by masquerading as `winmm.dll`, forwarding every ex
 
 - [ ] **Step 1: Toolchain check**
 
-Confirm MSVC and the Windows SDK are available. Run in a Developer PowerShell (or after importing `vcvars64`):
+Confirm the C toolchain is available:
 ```
-cl 2>&1 | Select-String "Microsoft"
+gcc --version    # llvm-mingw clang, already installed and on PATH
 ```
-Expected: prints the MSVC version banner. If `cl` is not found, install "Visual Studio Build Tools" with the "Desktop development with C++" workload, which includes the Windows SDK (D3D11 headers). Do not proceed until `cl` runs.
+Expected: prints the clang/llvm-mingw version. Also confirm the DirectX headers resolve:
+```
+echo '#include <d3d11.h>' | gcc -x c -fsyntax-only -   # expected: no error
+```
+If `gcc` is missing, either use the installed llvm-mingw `bin` directly, or install the MSVC "Desktop development with C++" workload and use `cl` instead (the build script supports both; MSVC path is a drop-in). Do not proceed until a compiler builds a trivial DLL.
 
 - [ ] **Step 2: Enumerate the real winmm exports (for forwarding)**
 
@@ -83,7 +87,7 @@ We forward to the real system winmm without redistributing it, by resolving its 
 ```
 proxy-winmm/tools/gen_winmm_forwarders.ps1
 ```
-This script (write it in this step) uses `dumpbin /exports C:\Windows\System32\winmm.dll` (or a PE export parse) to list named exports, and emits:
+This script (write it in this step) lists `C:\Windows\System32\winmm.dll`'s named exports — using `llvm-nm --extern-only --defined-only` / `llvm-objdump -p`, or a self-contained PowerShell PE export-table parser (no `dumpbin` dependency, since MSVC is not installed) — and emits:
 - `winmm_forward.h`: `void winmm_forward_init(void);` plus an `extern` function-pointer table.
 - `winmm_forward.c`: for each named export `NAME`, a `__declspec(dllexport)` stub `NAME` that jumps to the resolved real pointer, and `winmm_forward_init()` which `LoadLibraryW(L"C:\\Windows\\System32\\winmm.dll")` and `GetProcAddress`-resolves every pointer.
 
@@ -124,14 +128,19 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved) {
 
 - [ ] **Step 5: Write `build.ps1`**
 
-Compile all `src/*.c` into `winmm.dll` with MSVC. Key flags: `/LD` (DLL), `/O2`, `/MT` (static CRT, no VC-runtime dependency in the game), link `user32.lib shell32.lib`. Export the winmm stubs via `__declspec(dllexport)` (already in `winmm_forward.c`); no `.def` needed. Emit `winmm.dll` into `proxy-winmm/build/`.
+Compile all `src/*.c` into a 64-bit `winmm.dll` with llvm-mingw (`gcc`). The winmm stubs are exported via `__declspec(dllexport)` (in `winmm_forward.c`). Statically link the runtime so the game has no extra dependency. Link `user32`, `shell32`, `d3d11`, `dxgi` (added in later tasks). Emit into `proxy-winmm/build/`.
 ```powershell
-# build.ps1 (essentials)
+# build.ps1 (essentials — llvm-mingw)
 $ErrorActionPreference = "Stop"
 $out = "$PSScriptRoot\build"; New-Item -ItemType Directory -Force $out | Out-Null
 $src = Get-ChildItem "$PSScriptRoot\src\*.c" | ForEach-Object { $_.FullName }
-cl /nologo /O2 /MT /LD /W3 $src /Fe:"$out\winmm.dll" /Fo:"$out\\" user32.lib shell32.lib
+$inc = "-I`"$PSScriptRoot\third_party\minhook\include`""
+# -shared builds the DLL; -static links libgcc/CRT; output name winmm.dll
+gcc -O2 -shared -static -o "$out\winmm.dll" $inc $src `
+    -luser32 -lshell32 -ld3d11 -ldxgi -lole32
+if ($LASTEXITCODE -ne 0) { throw "build failed" }
 ```
+(If using MSVC instead, the equivalent is `cl /LD /MT /O2 src\*.c /Fe:build\winmm.dll user32.lib shell32.lib d3d11.lib dxgi.lib` — same artifact.)
 
 - [ ] **Step 6: Build**
 
