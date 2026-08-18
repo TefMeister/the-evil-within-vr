@@ -1,16 +1,18 @@
 # The Evil Within VR — Status
 
-Last updated: 2026-08-18 (session 1, later still: TASK 2 COMPLETE — we are
-hooked into the renderer). The stereo 6DOF core is being implemented from its
-[plan](../plans/2026-08-18-stereo-6dof-core-plan.md) (10 tasks). **Tasks 1–2 are
+Last updated: 2026-08-18 (session 1, later still: TASKS 1–3 COMPLETE — hooked in
+and capturing the device). The stereo 6DOF core is being implemented from its
+[plan](../plans/2026-08-18-stereo-6dof-core-plan.md) (10 tasks). **Tasks 1–3 are
 done.** Task 1: a proxy `winmm.dll` that forwards all 180 winmm exports and loads
 our code into the game ([notes/04-proxy-loader.md](04-proxy-loader.md)). Task 2:
 a MinHook trampoline on `IDXGISwapChain::Present`, obtained via a throwaway
-device's vtable (index 8), firing every frame on the game's render thread with
-the game responsive ([notes/05-present-hook.md](05-present-hook.md)). Next:
-Task 3, capturing the game's real device, context, and back-buffer from inside
-the hook. Mod code lives in the `the-evil-within-vr-mod` repo (push-gated; local
-commits only until release).
+device's vtable (index 8), firing every frame on the game's render thread. Task
+3: capturing the game's real device, context, and back-buffer (1280×720
+R8G8B8A8_UNORM) from inside the hook — both in
+[notes/05-present-hook.md](05-present-hook.md). **Next: Task 4**, the
+reverse-engineering hunt for the camera view and projection matrices (the heart
+of the stereo work). Mod code lives in the `the-evil-within-vr-mod` repo
+(push-gated; local commits only until release).
 
 The approved design is at
 [design/2026-08-18-stereo-6dof-core-design.md](../design/2026-08-18-stereo-6dof-core-design.md).
