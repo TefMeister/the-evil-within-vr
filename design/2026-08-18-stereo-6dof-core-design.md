@@ -44,8 +44,9 @@ those slot in without restructuring (see "The VR-submit seam").
   Not exercised in this sub-project, but the submit seam is shaped for it.
 - **Milestone scope:** stereo correctness first, validated side-by-side on the
   monitor, to isolate the reverse-engineering risk from the runtime-bridge risk.
-- **Injection vector:** proxy `dxgi.dll` plus MinHook trampoline hooks on the
-  specific D3D11 / DXGI methods we need.
+- **Injection vector:** proxy `winmm.dll` as the loader, plus MinHook trampoline
+  hooks on the specific D3D11 / DXGI methods we need. (Refined from `dxgi.dll`
+  during planning — see the Architecture section for why.)
 - **Stereo mechanism:** true double-render (real geometry rendered twice from
   two viewpoints), not depth-buffer reprojection. True double-render is the only
   path to correct depth everywhere and is the masterpiece-grade approach; its
@@ -54,29 +55,46 @@ those slot in without restructuring (see "The VR-submit seam").
 
 ## Architecture
 
-### Injection vector: proxy `dxgi.dll` + MinHook
+### Injection vector: proxy `winmm.dll` loader + MinHook
 
-The game loads `dxgi.dll` itself (confirmed in the live module list during the
-feasibility spike). DXGI owns the swap-chain and `Present`, which is the frame
-boundary we need. A proxy DLL placed next to the game executable is loaded as
+The game loads `winmm.dll` itself (confirmed in the live module list during the
+feasibility spike). A proxy DLL placed next to the game executable is loaded as
 part of normal startup — **after** the Steam CEG DRM has already unwrapped the
 real code in memory — so it sidesteps the launch-time anti-debug entirely, with
 no external injector required. This mirrors the proven proxy pattern from the
-Psychonauts mod (there a `d3d9.dll` proxy), adapted to D3D11 / DXGI.
+Psychonauts mod (there a `d3d9.dll` proxy).
+
+**Why `winmm.dll` rather than `dxgi.dll`:** the original spec named `dxgi.dll`,
+since DXGI owns the swap-chain and `Present`. In planning, that proved fragile:
+`dxgi.dll` exposes internal *ordinal* exports that `d3d11.dll` depends on, and a
+proxy that forwards those imperfectly breaks device creation. `winmm.dll` is a
+much safer loader — all of its exports are named and trivially forwarded, and we
+do not need to intercept any winmm call; we only need our code running in the
+process. We then reach D3D11 through MinHook rather than through the proxy
+itself (next paragraph). The two concerns — getting our code loaded, and hooking
+the renderer — are cleanly separated.
 
 Responsibilities of the proxy:
 
-1. Forward every real `dxgi.dll` export to the genuine system DLL, so the game
-   runs unchanged when the mod is inactive or falls back.
-2. Capture the `IDXGISwapChain`, `ID3D11Device`, and `ID3D11DeviceContext` as
-   they are created.
-3. Install MinHook trampoline hooks on the specific vtable methods the core
-   needs: `IDXGISwapChain::Present` (frame boundary), and the constant-buffer
-   upload path used for the camera matrices (see below).
+1. Forward every real `winmm.dll` export the game imports to the genuine system
+   DLL (resolved at runtime by absolute path, so no system DLL is redistributed),
+   so the game runs unchanged whether the mod is active, inactive, or falling
+   back.
+2. On load, spawn a bootstrap thread that installs the D3D11 hooks.
 
-DXGI exports are numerous; the proxy generates a forwarding `.def` (interface
-metadata we create, not game content — safe to commit) or uses per-export
-forwarders. Exact forwarding list is an implementation detail for the plan.
+Reaching D3D11 without proxying DXGI: MinHook needs the addresses of the
+swap-chain and device-context methods. We obtain them by momentarily creating a
+throwaway `ID3D11Device` and `IDXGISwapChain`, reading the method pointers from
+their vtables (which are shared by the game's real objects), and releasing the
+throwaway objects. We then install trampoline hooks on the methods we need:
+`IDXGISwapChain::Present` (frame boundary) and the constant-buffer upload path
+used for the camera matrices (see below). The game's `ID3D11Device`,
+`ID3D11DeviceContext`, and `IDXGISwapChain` are captured on the first hooked
+`Present`.
+
+The winmm forwarders are interface metadata we generate (export-name stubs), not
+game content — safe to commit. The exact forwarding list is an implementation
+detail for the plan.
 
 ### The reverse-engineering task (the heart of this sub-project)
 
@@ -146,9 +164,10 @@ All defaults are correctness-first; real tuning happens later on the home PC.
 
 ### Error handling — fail-safe
 
-- If the proxy cannot load the real `dxgi.dll`, or a hook fails to attach, or
-  the camera matrix cannot be found, the mod **falls through to the game's
-  normal mono rendering** and never crashes or hangs the game.
+- If the proxy cannot resolve the real `winmm.dll`, or MinHook cannot install a
+  hook, or the throwaway device cannot be created, or the camera matrix cannot be
+  found, the mod **falls through to the game's normal mono rendering** and never
+  crashes or hangs the game.
 - Verbose logging to a file, with an abort-on-fail protocol: any unexpected
   state is logged clearly with enough context to diagnose, and the mod disables
   its stereo path rather than proceeding on bad assumptions.
@@ -183,9 +202,10 @@ Present hook fires (frame boundary)
 
 ## Repository and build
 
-- New proxy project in the **`the-evil-within-vr-mod`** repo (C, compiled as
-  `dxgi.dll`, using MinHook), with a `build.ps1` build script. **This repo is
-  push-gated: nothing is pushed to it without explicit approval.**
+- New proxy project (`proxy-winmm/`) in the **`the-evil-within-vr-mod`** repo (C,
+  compiled as `winmm.dll` with the llvm-mingw toolchain, using MinHook), with a
+  `build.ps1` build script. **This repo is push-gated: nothing is pushed to it
+  without explicit approval.**
 - Only files we create are committed. No game files, ever. A `.gitignore` guards
   against accidental inclusion of binaries/assets.
 - The dev-archive and modding-notes repos are updated after each notable success
