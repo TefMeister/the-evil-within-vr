@@ -5,6 +5,7 @@
 #include "minhook_glue.h"
 #include "log.h"
 #include "d3d_capture.h"
+#include "cbdump.h"
 
 Present_t g_present_orig = NULL;
 
@@ -69,6 +70,12 @@ static Present_t capture_present_via_dummy_swapchain(void) {
     }
 
 cleanup:
+    if (ctx) {
+        /* Temporary Task 4 discovery instrumentation (TEWVR_DUMP=1 only);
+         * reads the same throwaway context's vtable this function already
+         * created, before it is released below. See cbdump.h. */
+        cbdump_install(ctx);
+    }
     if (sc)  IDXGISwapChain_Release(sc);
     if (ctx) ID3D11DeviceContext_Release(ctx);
     if (dev) ID3D11Device_Release(dev);
@@ -107,10 +114,15 @@ void hooks_install(void) {
 }
 
 void hooks_remove(void) {
-    if (!g_hooks_active) {
-        return;
-    }
-
+    /* mh_glue_shutdown() is called unconditionally (it is itself idempotent
+     * - a no-op if MinHook was never initialised) rather than gated on
+     * g_hooks_active, because cbdump_install() (Task 4's temporary
+     * constant-buffer dump hooks, TEWVR_DUMP=1 only) can have initialised
+     * MinHook and installed its own hooks even in the rare case the
+     * Present hook itself failed to install. This must run BEFORE
+     * cbdump_remove() so no Map/Unmap/UpdateSubresource trampoline can
+     * still be live when cbdump tears down its own state. */
     mh_glue_shutdown();
+    cbdump_remove();
     g_hooks_active = 0;
 }
