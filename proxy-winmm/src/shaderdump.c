@@ -7,6 +7,7 @@
 #include "MinHook.h"
 #include "minhook_glue.h"
 #include "log.h"
+#include "mvptable.h"
 
 /* ---- vtable indices (same verified counting scheme as cbdump.c) ----
  * ID3D11Device: 3 IUnknown slots, then the interface's own methods in
@@ -42,7 +43,11 @@ static DrawIndexedInst_t g_drawindexedinst_orig = NULL;
 static DrawInst_t g_drawinst_orig = NULL;
 
 static int g_sd_installed = 0;
-static int g_sd_active = 0;
+static int g_sd_active = 0;       /* full TEWVR_SHADERDUMP stats/blob-dump mode */
+static int g_cvs_hook_active = 0; /* CreateVertexShader hook installed at all (Task 5:
+                                      TEWVR_SHADERDUMP=1 OR TEWVR_SEQDUMP=1) - gates hash
+                                      tracking + mvptable's mvp-offset reflection, a
+                                      strict superset of g_sd_active */
 
 /* Guards every table below. Creates happen on loading threads while draws
  * happen on the render thread, so unlike cbdump this lock genuinely earns
@@ -118,6 +123,47 @@ static struct ShaderEntry *find_or_add_locked(ID3D11VertexShader *vs) {
         log_msg("shaderdump: shader table full (%d); further shaders untracked", g_shader_count);
     }
     return NULL;
+}
+
+/* Read-only counterpart to find_or_add_locked(): same open-addressing probe
+ * sequence, but never inserts. Correct as a "not present" test on a NULL
+ * slot only because entries are never removed while the table is active
+ * (matches find_or_add_locked's own assumption). Used by
+ * shaderdump_hash_for_shader() (Task 5: seqdump.c's VSSETSHADER event and
+ * mvptable.c's mvp_offset_for_shader() both need read-only ptr->hash
+ * lookups from outside this file). */
+static struct ShaderEntry *find_locked(ID3D11VertexShader *vs) {
+    uint64_t k = (uint64_t)(uintptr_t)vs;
+    UINT idx = (UINT)((k * 11400714819323198485ULL) >> 51) & (SD_MAP_SIZE - 1);
+    UINT i;
+    for (i = 0; i < SD_MAP_SIZE; i++) {
+        struct ShaderEntry *e = &g_shaders[(idx + i) & (SD_MAP_SIZE - 1)];
+        if (e->vs == vs) {
+            return e;
+        }
+        if (e->vs == NULL) {
+            return NULL;
+        }
+    }
+    return NULL;
+}
+
+uint64_t shaderdump_hash_for_shader(const void *vs_ptr) {
+    struct ShaderEntry *e;
+    uint64_t h = 0;
+
+    if (!g_sd_cs_ready || vs_ptr == NULL) {
+        return 0;
+    }
+
+    EnterCriticalSection(&g_sd_cs);
+    e = find_locked((ID3D11VertexShader *)vs_ptr);
+    if (e != NULL) {
+        h = e->hash;
+    }
+    LeaveCriticalSection(&g_sd_cs);
+
+    return h;
 }
 
 static int hash_already_dumped_locked(uint64_t h) {
@@ -242,7 +288,7 @@ static HRESULT STDMETHODCALLTYPE Hook_CreateVS(ID3D11Device *dev, const void *by
                                                 ID3D11VertexShader **out_vs) {
     HRESULT hr = g_createvs_orig(dev, bytecode, length, linkage, out_vs);
 
-    if (g_sd_active && SUCCEEDED(hr) && out_vs != NULL && *out_vs != NULL &&
+    if (g_cvs_hook_active && SUCCEEDED(hr) && out_vs != NULL && *out_vs != NULL &&
         bytecode != NULL && length > 0 && length < (SIZE_T)16 * 1024 * 1024) {
         uint64_t h = fnv1a64(bytecode, length);
         struct ShaderEntry *e;
@@ -253,12 +299,23 @@ static HRESULT STDMETHODCALLTYPE Hook_CreateVS(ID3D11Device *dev, const void *by
         if (e != NULL) {
             e->hash = h;
         }
-        fresh = !hash_already_dumped_locked(h);
+        /* Blob-to-disk dumping is still full-TEWVR_SHADERDUMP-only (short-
+         * circuit means hash_already_dumped_locked()'s insert-on-miss side
+         * effect only runs in that mode too, same as before Task 5). */
+        fresh = g_sd_active && !hash_already_dumped_locked(h);
         LeaveCriticalSection(&g_sd_cs);
 
         if (fresh) {
             dump_blob(h, bytecode, length);
         }
+
+        /* Task 5 feature 2: mvp-offset reflection via D3DReflect. Runs
+         * whenever this hook is installed at all (TEWVR_SHADERDUMP=1 or
+         * TEWVR_SEQDUMP=1), independent of full shaderdump stats/blob-dump
+         * activation. mvptable_on_shader_created() dedupes by hash and is
+         * fail-safe (D3DReflect unavailable, reflection failure, etc. all
+         * log once and return). */
+        mvptable_on_shader_created(h, bytecode, length);
     }
     return hr;
 }
@@ -328,6 +385,7 @@ void shaderdump_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx)
     char flag[8];
     DWORD len;
     void **dev_vtbl, **ctx_vtbl;
+    int shaderdump_on, seqdump_on;
     int ok_create, ok_set, ok_di, ok_d, ok_dii, ok_dinst;
 
     if (g_sd_installed) {
@@ -336,12 +394,16 @@ void shaderdump_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx)
     g_sd_installed = 1;
 
     len = GetEnvironmentVariableA("TEWVR_SHADERDUMP", flag, sizeof(flag));
-    if (len == 0 || len >= sizeof(flag) || strcmp(flag, "1") != 0) {
+    shaderdump_on = (len > 0 && len < sizeof(flag) && strcmp(flag, "1") == 0);
+    len = GetEnvironmentVariableA("TEWVR_SEQDUMP", flag, sizeof(flag));
+    seqdump_on = (len > 0 && len < sizeof(flag) && strcmp(flag, "1") == 0);
+
+    if (!shaderdump_on && !seqdump_on) {
         return; /* off by default: touch nothing */
     }
 
     if (dummy_dev == NULL || dummy_ctx == NULL) {
-        log_msg("shaderdump: TEWVR_SHADERDUMP=1 but dummy device/context is NULL; skipping");
+        log_msg("shaderdump: shader hooks requested but dummy device/context is NULL; skipping");
         return;
     }
 
@@ -361,33 +423,52 @@ void shaderdump_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx)
     dev_vtbl = *(void ***)dummy_dev;
     ctx_vtbl = *(void ***)dummy_ctx;
 
+    /* CreateVertexShader: needed for shader-ptr->hash tracking (seqdump's
+     * VSSETSHADER event) and the Task 5 mvp-offset reflection table
+     * (mvptable.c) whenever EITHER mode is on - not just full
+     * TEWVR_SHADERDUMP stats/blob-dump mode. */
     ok_create = mh_glue_create_and_enable(dev_vtbl[VTBL_DEV_CREATEVERTEXSHADER],
                                            (void *)&Hook_CreateVS, (void **)&g_createvs_orig,
                                            "ID3D11Device::CreateVertexShader");
-    ok_set = mh_glue_create_and_enable(ctx_vtbl[VTBL_CTX_VSSETSHADER],
-                                        (void *)&Hook_VSSetShader, (void **)&g_vsset_orig,
-                                        "ID3D11DeviceContext::VSSetShader");
-    ok_di = mh_glue_create_and_enable(ctx_vtbl[VTBL_CTX_DRAWINDEXED],
-                                       (void *)&Hook_DrawIndexed, (void **)&g_drawindexed_orig,
-                                       "ID3D11DeviceContext::DrawIndexed");
-    ok_d = mh_glue_create_and_enable(ctx_vtbl[VTBL_CTX_DRAW],
-                                      (void *)&Hook_Draw, (void **)&g_draw_orig,
-                                      "ID3D11DeviceContext::Draw");
-    ok_dii = mh_glue_create_and_enable(ctx_vtbl[VTBL_CTX_DRAWINDEXEDINST],
-                                        (void *)&Hook_DrawIndexedInst,
-                                        (void **)&g_drawindexedinst_orig,
-                                        "ID3D11DeviceContext::DrawIndexedInstanced");
-    ok_dinst = mh_glue_create_and_enable(ctx_vtbl[VTBL_CTX_DRAWINST],
-                                          (void *)&Hook_DrawInst, (void **)&g_drawinst_orig,
-                                          "ID3D11DeviceContext::DrawInstanced");
+    g_cvs_hook_active = ok_create;
+    if (g_cvs_hook_active) {
+        mvptable_init();
+    }
 
-    /* Stats need at least VSSetShader plus one draw hook; blob dumping
-     * needs CreateVertexShader. Partial success still yields usable data,
-     * so activate on any draw path being live. */
-    g_sd_active = ok_set && (ok_di || ok_d || ok_dii || ok_dinst);
+    if (shaderdump_on) {
+        ok_set = mh_glue_create_and_enable(ctx_vtbl[VTBL_CTX_VSSETSHADER],
+                                            (void *)&Hook_VSSetShader, (void **)&g_vsset_orig,
+                                            "ID3D11DeviceContext::VSSetShader");
+        ok_di = mh_glue_create_and_enable(ctx_vtbl[VTBL_CTX_DRAWINDEXED],
+                                           (void *)&Hook_DrawIndexed, (void **)&g_drawindexed_orig,
+                                           "ID3D11DeviceContext::DrawIndexed");
+        ok_d = mh_glue_create_and_enable(ctx_vtbl[VTBL_CTX_DRAW],
+                                          (void *)&Hook_Draw, (void **)&g_draw_orig,
+                                          "ID3D11DeviceContext::Draw");
+        ok_dii = mh_glue_create_and_enable(ctx_vtbl[VTBL_CTX_DRAWINDEXEDINST],
+                                            (void *)&Hook_DrawIndexedInst,
+                                            (void **)&g_drawindexedinst_orig,
+                                            "ID3D11DeviceContext::DrawIndexedInstanced");
+        ok_dinst = mh_glue_create_and_enable(ctx_vtbl[VTBL_CTX_DRAWINST],
+                                              (void *)&Hook_DrawInst, (void **)&g_drawinst_orig,
+                                              "ID3D11DeviceContext::DrawInstanced");
 
-    log_msg("shaderdump: hooks create=%d set=%d di=%d d=%d dii=%d dinst=%d -> %s",
+        /* Stats need at least VSSetShader plus one draw hook. Partial
+         * success still yields usable data, so activate on any draw path
+         * being live. */
+        g_sd_active = ok_set && (ok_di || ok_d || ok_dii || ok_dinst);
+    } else {
+        /* TEWVR_SEQDUMP-only run: seqdump.c hooks VSSetShader/Draw* itself
+         * (its own independent detours, same shared-vtable trick) - no
+         * need to install shaderdump's copies too. */
+        ok_set = ok_di = ok_d = ok_dii = ok_dinst = 0;
+        g_sd_active = 0;
+    }
+
+    log_msg("shaderdump: hooks create=%d set=%d di=%d d=%d dii=%d dinst=%d "
+             "(shaderdump=%s seqdump=%s) -> stats %s",
              ok_create, ok_set, ok_di, ok_d, ok_dii, ok_dinst,
+             shaderdump_on ? "on" : "off", seqdump_on ? "on" : "off",
              g_sd_active ? "ACTIVE" : "inactive");
 }
 
@@ -396,6 +477,8 @@ void shaderdump_remove(void) {
         return;
     }
     g_sd_active = 0;
+    g_cvs_hook_active = 0;
+    mvptable_shutdown();
     DeleteCriticalSection(&g_sd_cs);
     g_sd_cs_ready = 0;
 }

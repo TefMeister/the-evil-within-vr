@@ -7,6 +7,7 @@
 #include "d3d_capture.h"
 #include "cbdump.h"
 #include "shaderdump.h"
+#include "seqdump.h"
 
 Present_t g_present_orig = NULL;
 
@@ -24,6 +25,12 @@ static HRESULT STDMETHODCALLTYPE Hook_Present(IDXGISwapChain *sc, UINT sync, UIN
     if ((g_frame++ % 120) == 0) {
         log_msg("Present hook alive: frame %llu", (unsigned long long)g_frame);
     }
+
+    /* Task 5 TEWVR_SEQDUMP=1 event stream: cheap no-op unless seqdump's
+     * hooks installed successfully. Drives the "arm 300 frames after the
+     * first Present" logic and emits the PRESENT frame-boundary marker. */
+    seqdump_on_present(g_frame);
+
     return g_present_orig(sc, sync, flags);
 }
 
@@ -79,9 +86,16 @@ cleanup:
     }
     if (dev && ctx) {
         /* Temporary Task 4 shader-level RE instrumentation
-         * (TEWVR_SHADERDUMP=1 only); same throwaway-vtable contract.
-         * See shaderdump.h. */
+         * (TEWVR_SHADERDUMP=1 only, but Task 5 also arms its
+         * CreateVertexShader hook under TEWVR_SEQDUMP=1 - see
+         * shaderdump.h); same throwaway-vtable contract. */
         shaderdump_install(dev, ctx);
+    }
+    if (ctx) {
+        /* Task 5 TEWVR_SEQDUMP=1 ordered event-stream instrumentation;
+         * same throwaway-vtable contract as cbdump/shaderdump above. See
+         * seqdump.h. */
+        seqdump_install(ctx);
     }
     if (sc)  IDXGISwapChain_Release(sc);
     if (ctx) ID3D11DeviceContext_Release(ctx);
@@ -132,5 +146,6 @@ void hooks_remove(void) {
     mh_glue_shutdown();
     cbdump_remove();
     shaderdump_remove();
+    seqdump_remove();
     g_hooks_active = 0;
 }
