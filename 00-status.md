@@ -1,13 +1,16 @@
 # Status
 
-**Last updated: 2026-08-18 — Tasks 1–3 complete; Task 4: the view matrix is found.**
+**Last updated: 2026-08-19 — Tasks 1–3 complete; Task 4 still open (and the earlier "view matrix" was a false lead).**
 
-The camera view matrix has been located — a 384-byte buffer the game refreshes
-every frame, with the view matrix 48 bytes in, confirmed from a 40k-snapshot
-gameplay capture ([06-camera-matrix.md](06-camera-matrix.md)). Still to do on
-Task 4: one more short capture (now set up to grab the whole buffer) to find the
-projection / combined view-projection matrix and confirm which one the shaders
-use — then we can start bending the camera per eye.
+Honest update: the 384-byte "view matrix" we thought we'd found was actually a
+per-object model matrix (a cloth mesh on Sebastian), caught by testing it live.
+Today we mapped the render pipeline instead: the shared per-frame buffers are all
+screen-space (96 = lighting, 64 = colour, 128 = lighting), and **nothing shared
+moves the world geometry** — so the engine looks like it transforms geometry
+per-object (classic id Tech 5), which is the harder case for VR. See
+[06b-render-pipeline-findings.md](06b-render-pipeline-findings.md). Next up is
+proper shader/debugger reverse engineering to find exactly what positions world
+vertices, rather than poking buffers and watching the screen.
 
 ---
 
