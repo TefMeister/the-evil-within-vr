@@ -1,15 +1,18 @@
 # The Evil Within VR — Status
 
-Last updated: 2026-08-18 (session 1, later still: TASKS 1–3 COMPLETE; TASK 4 —
-VIEW MATRIX FOUND). The camera view matrix is located: a 384-byte double-buffered
-dynamic constant buffer, view at byte offset 48, row-major 3×4 affine — confirmed
-from a 40k-record gameplay capture where its rotation tracked the camera pan and
-its translation tracked movement (only 2 of 40,000 windows matched). See
-[notes/06-camera-matrix-discovery.md](06-camera-matrix-discovery.md). **Still
-open on Task 4:** the projection / combined view-projection matrix (beyond byte
-128, not yet captured) — needs one more full-buffer gameplay capture (tooling now
-widened to 512 bytes) to find it and confirm which matrix the shaders consume
-before the per-eye override (Task 6). The stereo 6DOF core is being implemented from its
+Last updated: 2026-08-19 (session 2: TASK 4 STILL OPEN — the world-geometry
+transform is not yet found, and the earlier "view matrix" was a false lead).
+**Correction:** the 384-byte matrix reported on 2026-08-18 turned out to be a
+per-object model matrix (a cloth mesh), not the camera — see
+[notes/06b-render-pipeline-findings.md](06b-render-pipeline-findings.md). What we
+established today by bind-counting and live perturbation: the heavily-shared
+per-frame buffers are all **screen-space** — 96 bytes = lighting, 64 = colour
+grading, 128 = lighting — and **no single shared buffer moves world geometry**.
+The engine appears to transform geometry with **per-object CPU-computed
+matrices** (id Tech 5 style), the harder engine class for VR. **Next:** shader-
+level RE (x64dbg trace of a geometry draw, or vertex-shader disassembly) to find
+exactly which matrix positions world vertices — not more visual probing. Tasks
+1–3 remain complete (proxy loader, Present hook, device capture). The stereo 6DOF core is being implemented from its
 [plan](../plans/2026-08-18-stereo-6dof-core-plan.md) (10 tasks). **Tasks 1–3 are
 done.** Task 1: a proxy `winmm.dll` that forwards all 180 winmm exports and loads
 our code into the game ([notes/04-proxy-loader.md](04-proxy-loader.md)). Task 2:

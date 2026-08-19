@@ -1,5 +1,16 @@
 # 06 — Finding the camera matrix (Task 4)
 
+> **⚠️ CORRECTION (2026-08-19): the finding below is WRONG and superseded.**
+> The 384-byte "view matrix at byte 48" described in this note turned out, on
+> live visual testing, to be a **per-object model matrix** (a cloth mesh on the
+> player character), not the camera. A matrix that is orthonormal and varies
+> with the camera can just as easily be an object that moves with the camera.
+> The corrected, still-in-progress findings are in
+> [06b-render-pipeline-findings.md](06b-render-pipeline-findings.md). The
+> original text is kept below as a record of the false lead.
+
+---
+
 The heart of the whole mod: locating the game's camera view matrix, so we can
 override it per eye to create stereo. **The view matrix is found.** The
 projection / combined view-projection matrix still needs one more capture (see
