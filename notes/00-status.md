@@ -1,18 +1,23 @@
 # The Evil Within VR — Status
 
-Last updated: 2026-08-19 (session 2: TASK 4 STILL OPEN — the world-geometry
-transform is not yet found, and the earlier "view matrix" was a false lead).
-**Correction:** the 384-byte matrix reported on 2026-08-18 turned out to be a
-per-object model matrix (a cloth mesh), not the camera — see
-[notes/06b-render-pipeline-findings.md](06b-render-pipeline-findings.md). What we
-established today by bind-counting and live perturbation: the heavily-shared
-per-frame buffers are all **screen-space** — 96 bytes = lighting, 64 = colour
-grading, 128 = lighting — and **no single shared buffer moves world geometry**.
-The engine appears to transform geometry with **per-object CPU-computed
-matrices** (id Tech 5 style), the harder engine class for VR. **Next:** shader-
-level RE (x64dbg trace of a geometry draw, or vertex-shader disassembly) to find
-exactly which matrix positions world vertices — not more visual probing. Tasks
-1–3 remain complete (proxy loader, Present hook, device capture). The stereo 6DOF core is being implemented from its
+Last updated: 2026-08-19 (session 3: **TASK 4 RESOLVED** — the world-geometry
+transform is found, by vertex-shader disassembly). Every material vertex shader
+receives a per-draw slot-0 cbuffer (`constantBufferV`) whose reflection data
+names the engine parameters, including the four rows of the finished
+model-view-projection matrix (`mvpmatrixx/y/z/w`); `SV_Position` is four `dp4`s
+against those rows (id Tech 5 renderprog-parm style). 145 of 167 captured
+shaders consume them; the rest are post-process/depth-only. Crucially, stereo
+needs **no per-object knowledge**: a constant per-eye left-multiply
+`K_eye = P_eye * T_eye * P^-1` applied to every per-draw MVP yields the eye
+view. Full write-up in
+[notes/06c-shader-disassembly-mvp-found.md](06c-shader-disassembly-mvp-found.md);
+instrumentation (`shaderdump.c` + `tools/dxbc_disasm.c`) is in the mod repo.
+**Next:** pin down the per-draw fill→bind→draw ordering to choose the patch
+point, then Task 5 (double-render strategy). The earlier session-2 findings
+stand: the 384-byte "view matrix" was a per-object cloth matrix, and the shared
+per-frame buffers are screen-space only (96 bytes = lighting, 64 = colour
+grading, 128 = lighting) — see
+[notes/06b-render-pipeline-findings.md](06b-render-pipeline-findings.md). The stereo 6DOF core is being implemented from its
 [plan](../plans/2026-08-18-stereo-6dof-core-plan.md) (10 tasks). **Tasks 1–3 are
 done.** Task 1: a proxy `winmm.dll` that forwards all 180 winmm exports and loads
 our code into the game ([notes/04-proxy-loader.md](04-proxy-loader.md)). Task 2:
