@@ -2,8 +2,10 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include <math.h>
 
 #include "MinHook.h"
 #include "minhook_glue.h"
@@ -27,6 +29,18 @@ static Map_t g_map_orig = NULL;
 static Unmap_t g_unmap_orig = NULL;
 static UpdateSubresource_t g_update_orig = NULL;
 
+/* VSSetConstantBuffers: to find the shared camera buffer deterministically by
+ * counting which constant buffer is bound to the vertex shader for the most
+ * draws (the per-frame camera/viewProj is bound to a fixed slot every draw). */
+typedef void(STDMETHODCALLTYPE *VSSetCB_t)(ID3D11DeviceContext *, UINT, UINT,
+                                            ID3D11Buffer *const *);
+static VSSetCB_t g_vscb_orig = NULL;
+#define BIND_TABLE 256
+struct BindEntry { ID3D11Resource *res; UINT count; UINT size; UINT slot; };
+static struct BindEntry g_binds[BIND_TABLE];
+static ULONGLONG g_bind_log_ms = 0;
+static int g_bind_logging = 0; /* enabled when TEWVR_FINDCAM=1 */
+
 /* Guards g_map_table, the throttle table, g_cb_total_records, g_cb_capped,
  * and every write to g_cb_fp. Contention is expected to be near-zero (the
  * immediate context's Map/Unmap/UpdateSubresource calls all happen on the
@@ -44,6 +58,14 @@ static ULONGLONG g_cb_start_ms = 0;
 static int g_cb_total_records = 0;
 static int g_cb_capped = 0;
 static int g_table_full_warned = 0;
+
+/* Discovery probe (TEWVR_TARGETSIZE / TEWVR_TARGETOFF): if TARGETSIZE is set,
+ * oscillate-scale the 16 floats at float-offset TARGETOFF of every constant
+ * buffer of exactly that byte size, to find which buffer/offset the visible
+ * geometry transforms through (the whole scene warps when it is the camera
+ * view/viewProj). Temporary; not part of the mod proper. */
+static int g_target_size = 0;
+static int g_target_off = 0;
 
 #define CBDUMP_MAX_RECORDS 40000
 #define CBDUMP_MAX_MS      600000
@@ -260,6 +282,76 @@ static void cbdump_record(const char *api, UINT byteWidth, const void *resPtr, c
 
 /* ---- detours ---- */
 
+static void count_bind(ID3D11Buffer *buf, UINT slot) {
+    ID3D11Resource *res = (ID3D11Resource *)buf;
+    int i, free_slot = -1;
+    D3D11_BUFFER_DESC d;
+    if (buf == NULL) {
+        return;
+    }
+    for (i = 0; i < BIND_TABLE; i++) {
+        if (g_binds[i].res == res) {
+            g_binds[i].count++;
+            return;
+        }
+        if (free_slot < 0 && g_binds[i].res == NULL) {
+            free_slot = i;
+        }
+    }
+    if (free_slot < 0) {
+        return;
+    }
+    ID3D11Buffer_GetDesc(buf, &d);
+    g_binds[free_slot].res = res;
+    g_binds[free_slot].count = 1;
+    g_binds[free_slot].size = d.ByteWidth;
+    g_binds[free_slot].slot = slot;
+}
+
+static void log_top_binds(void) {
+    ULONGLONG now = GetTickCount64();
+    int i, j;
+    struct BindEntry top[8];
+    if (now - g_bind_log_ms < 2000) {
+        return;
+    }
+    g_bind_log_ms = now;
+    memset(top, 0, sizeof(top));
+    for (i = 0; i < BIND_TABLE; i++) {
+        if (g_binds[i].res == NULL) {
+            continue;
+        }
+        for (j = 0; j < 8; j++) {
+            if (g_binds[i].count > top[j].count) {
+                int k;
+                for (k = 7; k > j; k--) {
+                    top[k] = top[k - 1];
+                }
+                top[j] = g_binds[i];
+                break;
+            }
+        }
+    }
+    log_msg("FINDCAM top VS constant buffers by bind-count:");
+    for (j = 0; j < 8 && top[j].count > 0; j++) {
+        log_msg("  #%d res=0x%llX size=%u slot=%u binds=%u", j + 1,
+                 (unsigned long long)(uintptr_t)top[j].res, top[j].size, top[j].slot,
+                 top[j].count);
+    }
+}
+
+static void STDMETHODCALLTYPE Hook_VSSetCB(ID3D11DeviceContext *ctx, UINT StartSlot,
+                                            UINT NumBuffers, ID3D11Buffer *const *ppCB) {
+    if (g_bind_logging && ppCB != NULL) {
+        UINT i;
+        for (i = 0; i < NumBuffers && (StartSlot + i) < 6; i++) {
+            count_bind(ppCB[i], StartSlot + i);
+        }
+        log_top_binds();
+    }
+    g_vscb_orig(ctx, StartSlot, NumBuffers, ppCB);
+}
+
 static HRESULT STDMETHODCALLTYPE Hook_Map(ID3D11DeviceContext *ctx, ID3D11Resource *pResource,
                                            UINT Subresource, D3D11_MAP MapType, UINT MapFlags,
                                            D3D11_MAPPED_SUBRESOURCE *pMappedResource) {
@@ -277,12 +369,42 @@ static HRESULT STDMETHODCALLTYPE Hook_Map(ID3D11DeviceContext *ctx, ID3D11Resour
     return hr;
 }
 
+/* Live probe control: re-read %LOCALAPPDATA%\TEWVR\probe.txt ("<size> <off>")
+ * about twice a second so the probe target can be swept without relaunching
+ * (get into a level once, then change targets by rewriting the file). */
+static ULONGLONG g_probe_check_ms = 0;
+static void maybe_reload_probe(void) {
+    ULONGLONG now = GetTickCount64();
+    wchar_t la[MAX_PATH], path[MAX_PATH];
+    FILE *fp;
+    int sz = 0, off = 0;
+    if (now - g_probe_check_ms < 500) {
+        return;
+    }
+    g_probe_check_ms = now;
+    if (!GetEnvironmentVariableW(L"LOCALAPPDATA", la, MAX_PATH)) {
+        return;
+    }
+    swprintf(path, MAX_PATH, L"%s\\TEWVR\\probe.txt", la);
+    fp = _wfopen(path, L"r");
+    if (!fp) {
+        return;
+    }
+    if (fscanf(fp, "%d %d", &sz, &off) >= 1) {
+        g_target_size = sz;
+        g_target_off = off;
+    }
+    fclose(fp);
+}
+
 static void STDMETHODCALLTYPE Hook_Unmap(ID3D11DeviceContext *ctx, ID3D11Resource *pResource,
                                           UINT Subresource) {
     int slot;
     void *data = NULL;
     UINT byteWidth = 0;
     int found = 0;
+
+    maybe_reload_probe();
 
     EnterCriticalSection(&g_cb_cs);
     slot = find_mapped_resource_locked(pResource);
@@ -298,6 +420,23 @@ static void STDMETHODCALLTYPE Hook_Unmap(ID3D11DeviceContext *ctx, ID3D11Resourc
      * valid until the real Unmap runs. */
     if (found) {
         cbdump_record("Map/Unmap", byteWidth, pResource, data);
+
+        /* Discovery probe: oscillate-scale the 16 floats at TARGETOFF of every
+         * buffer of exactly TARGETSIZE bytes, before it commits. When that
+         * matrix is the camera view/viewProj, the WHOLE scene pulses/warps. */
+        if (g_target_size != 0 && (int)byteWidth == g_target_size && data != NULL) {
+            float *f = (float *)data;
+            int nf = (int)(byteWidth / 4);
+            float t = (float)(GetTickCount64() % 2000u) / 2000.0f * 6.2831853f;
+            int i;
+            /* NON-uniform perturbation: a per-element phase-shifted, magnitude-
+             * relative wobble. Unlike a uniform scale (which cancels in the
+             * perspective divide for a view-projection matrix), this visibly
+             * warps the scene if the buffer is any kind of transform. */
+            for (i = g_target_off; i < nf; i++) {
+                f[i] += (fabsf(f[i]) + 0.5f) * 0.6f * sinf(t + (float)i * 0.9f);
+            }
+        }
     }
 
     g_unmap_orig(ctx, pResource, Subresource);
@@ -362,6 +501,28 @@ void cbdump_install(ID3D11DeviceContext *dummy_ctx) {
         return; /* off by default: touch nothing */
     }
 
+    {
+        char ts[32];
+        DWORD tl = GetEnvironmentVariableA("TEWVR_TARGETSIZE", ts, sizeof(ts));
+        if (tl > 0 && tl < sizeof(ts)) {
+            g_target_size = atoi(ts);
+            tl = GetEnvironmentVariableA("TEWVR_TARGETOFF", ts, sizeof(ts));
+            if (tl > 0 && tl < sizeof(ts)) {
+                g_target_off = atoi(ts);
+            }
+            log_msg("cbdump: probe target size=%d offset(float)=%d", g_target_size,
+                     g_target_off);
+        }
+    }
+    {
+        char fc[8];
+        DWORD fl = GetEnvironmentVariableA("TEWVR_FINDCAM", fc, sizeof(fc));
+        if (fl > 0 && fl < sizeof(fc) && strcmp(fc, "1") == 0) {
+            g_bind_logging = 1;
+            log_msg("cbdump: FINDCAM on -> counting VS constant-buffer binds");
+        }
+    }
+
     if (dummy_ctx == NULL) {
         log_msg("cbdump: TEWVR_DUMP=1 but dummy context is NULL; skipping constant-buffer dump hooks");
         return;
@@ -389,6 +550,11 @@ void cbdump_install(ID3D11DeviceContext *dummy_ctx) {
                                           (void **)&g_unmap_orig, "ID3D11DeviceContext::Unmap");
     ok_update = mh_glue_create_and_enable(vtbl[VTBL_IDX_UPDATESUBRESOURCE], (void *)&Hook_UpdateSubresource,
                                            (void **)&g_update_orig, "ID3D11DeviceContext::UpdateSubresource");
+    if (g_bind_logging) {
+        mh_glue_create_and_enable(vtbl[VTBL_IDX_VSSETCONSTANTBUFFERS], (void *)&Hook_VSSetCB,
+                                   (void **)&g_vscb_orig,
+                                   "ID3D11DeviceContext::VSSetConstantBuffers");
+    }
 
     if (!ok_map || !ok_unmap) {
         log_msg("cbdump: Map/Unmap hook pair incomplete (map=%d unmap=%d); "
