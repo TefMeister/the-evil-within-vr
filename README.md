@@ -4,10 +4,24 @@ A work-in-progress VR mod for **The Evil Within** (2014, Tango Gameworks /
 Bethesda), a game built on a heavily modified id Tech 5 engine with no existing
 VR modding framework.
 
-**Status: pre-release, in active development.** No playable release yet. The
-current sub-project is the *stereo 6DOF core* — rendering the game from two eye
-viewpoints per frame and presenting it side-by-side on a flat monitor, as the
-foundation for full VR support (head tracking and headset output come next).
+> ## ⚠️ This is NOT playable in VR yet
+>
+> **Do not install this expecting to play The Evil Within in a headset — it will
+> not do that right now.** There is currently no VR output, no stereo rendering,
+> no head tracking, and nothing shows up in a headset. This repository is an
+> in-progress reverse-engineering effort, published in the open so the work is
+> visible and backed up — not a released VR mod.
+>
+> **This notice will be changed only when the mod genuinely renders the game in a
+> VR headset.** Until you see that update here, treat this as developer
+> work-in-progress, not something to play.
+
+**Status: pre-release, in active development — not VR-ready.** No playable
+release yet. The current sub-project is the *stereo 6DOF core* — rendering the
+game from two eye viewpoints per frame and presenting it side-by-side on a flat
+monitor, as the foundation for full VR support (head tracking and headset output
+come after that). Progress so far is the plumbing: a proxy DLL that loads into
+the game, Direct3D 11 hooks, and locating the camera matrices — no VR yet.
 
 This repository holds **only files we create** for the mod. No game files are
 included, and none ever will be — the mod requires you to own a legitimate copy
