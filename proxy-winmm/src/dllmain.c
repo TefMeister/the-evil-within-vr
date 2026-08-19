@@ -2,6 +2,7 @@
 #include "log.h"
 #include "winmm_forward.h"
 #include "hooks.h"
+#include "seqdump.h"
 
 /*
  * Waits (briefly, with short polling sleeps) for d3d11.dll to be loaded by
@@ -37,6 +38,12 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved) {
                                      failure diagnostics (log_msg calls) are never lost */
         winmm_forward_init();    /* resolve real winmm */
         log_msg("TEWVR winmm proxy attached (pid=%lu)", GetCurrentProcessId());
+
+        /* Task 5 addendum: clear any seqarm.txt left over from a previous
+         * TEWVR_SEQDUMP_ARMFILE=1 session, unconditionally, before any
+         * seqdump logic can run - so a leftover file can never prematurely
+         * arm this (or a later) run. Cheap and fail-safe; see seqdump.h. */
+        seqdump_clear_stale_armfile();
 
         {
             HANDLE h = CreateThread(NULL, 0, bootstrap_thread, NULL, 0, NULL);

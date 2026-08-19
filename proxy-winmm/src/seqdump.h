@@ -30,9 +30,22 @@
  *
  * One line per event to %LOCALAPPDATA%\TEWVR\seqdump.log, with a
  * monotonically increasing sequence number and thread id on every line.
- * Capture arms 300 frames after the first Present (skip loading screens),
- * then captures the first 40,000 events before writing a final
- * "SEQDUMP COMPLETE" line and going silent.
+ * By default, capture arms 300 frames after the first Present (skip
+ * loading screens); then captures the first 40,000 events before writing
+ * a final "SEQDUMP COMPLETE" line and going silent.
+ *
+ * Addendum (post-Task-5 review): TEWVR_SEQDUMP_ARMFILE=1 (only meaningful
+ * alongside TEWVR_SEQDUMP=1) replaces the frame-301 auto-arm with a
+ * live/manual arm - every ~30 frames, Hook_Present checks (a cheap
+ * existence check, not an open) whether %LOCALAPPDATA%\TEWVR\seqarm.txt
+ * exists, and arms the instant it appears, logging an
+ * "ARMED by seqarm.txt at frame N" line. This lets a controller reach
+ * real gameplay first (past the menu/loading screens that would otherwise
+ * burn the 40,000-event budget) and only then start the capture by
+ * creating the file. seqdump_clear_stale_armfile() deletes any leftover
+ * seqarm.txt at DLL startup so a file left over from a previous session
+ * can't prematurely arm a later one. Default behaviour (ARMFILE unset)
+ * is unchanged.
  *
  * Entirely inert unless TEWVR_SEQDUMP=1 when seqdump_install() runs -
  * off by default, so normal play (and every other TEWVR_* mode) is
@@ -63,10 +76,23 @@ void seqdump_remove(void);
 
 /* Called from hooks.c's Hook_Present on every frame (cheap no-op unless
  * seqdump's hooks installed successfully). Emits the PRESENT event once
- * armed, and performs the arm transition itself (300 frames after the
- * first call this function ever sees) - including the one-line
+ * armed, and performs the arm transition itself - by default 300 frames
+ * after the first call this function ever sees (including the one-line
  * "does the REAL game context QI to ID3D11DeviceContext1" detection the
- * brief asks for at arm time. `frame_number` is hooks.c's own g_frame
- * counter (any monotonically increasing per-Present counter works; only
- * relative deltas matter here). */
+ * brief asks for at arm time), or - if TEWVR_SEQDUMP_ARMFILE=1 - the
+ * instant %LOCALAPPDATA%\TEWVR\seqarm.txt appears (checked every ~30
+ * frames). `frame_number` is hooks.c's own g_frame counter (any
+ * monotonically increasing per-Present counter works; only relative
+ * deltas matter here). */
 void seqdump_on_present(UINT64 frame_number);
+
+/* Deletes any stale %LOCALAPPDATA%\TEWVR\seqarm.txt left over from a
+ * previous TEWVR_SEQDUMP_ARMFILE=1 run, so it can't prematurely arm a
+ * later run before the controller creates a fresh one. Call once,
+ * unconditionally, at DLL startup (dllmain.c's DLL_PROCESS_ATTACH) -
+ * regardless of whether TEWVR_SEQDUMP is set this run, since a later run
+ * within the same game session might set TEWVR_SEQDUMP_ARMFILE=1 and
+ * should not see a leftover file. Fail-safe: the common case (file
+ * absent, or %LOCALAPPDATA%\TEWVR doesn't exist yet) is silent; only an
+ * unexpected deletion failure logs once. Never crashes. */
+void seqdump_clear_stale_armfile(void);
