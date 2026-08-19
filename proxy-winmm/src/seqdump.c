@@ -30,6 +30,7 @@
 
 #define SEQDUMP_MAX_EVENTS  40000
 #define SEQDUMP_ARM_FRAMES  300
+#define SEQDUMP_ARMFILE_CHECK_FRAMES 30
 #define SEQ_CB_MAX_BYTEWIDTH 8192
 
 typedef HRESULT(STDMETHODCALLTYPE *Map_t)(ID3D11DeviceContext *, ID3D11Resource *, UINT,
@@ -78,6 +79,7 @@ static int g_seq_complete = 0;
 static int g_seq_first_frame_set = 0;
 static UINT64 g_seq_first_frame = 0;
 static int g_seq_armed = 0;
+static int g_seq_armfile_mode = 0; /* TEWVR_SEQDUMP_ARMFILE=1: arm via seqarm.txt instead of frame-301 */
 
 /* Map->Unmap float shadow: "shadow only the most recent MAP per thread - a
  * single-slot latch is fine" (brief). Small fixed table keyed by thread id;
@@ -95,6 +97,19 @@ static struct MapLatch g_latch[SEQ_LATCH_SIZE];
 
 static int seq_active(void) {
     return g_seq_hooks_ok && g_seq_armed && !g_seq_complete;
+}
+
+/* Fills `out` with %LOCALAPPDATA%\TEWVR\seqarm.txt, or an empty string on
+ * any failure (LOCALAPPDATA unset/too long). Shared by the ARMFILE arm
+ * check and seqdump_clear_stale_armfile(). */
+static void seqarm_path(wchar_t *out, size_t out_count) {
+    wchar_t la[MAX_PATH];
+    DWORD len = GetEnvironmentVariableW(L"LOCALAPPDATA", la, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) {
+        out[0] = L'\0';
+        return;
+    }
+    swprintf(out, out_count, L"%s\\TEWVR\\seqarm.txt", la);
 }
 
 /* Only ID3D11Buffer resources with BindFlags & D3D11_BIND_CONSTANT_BUFFER
@@ -414,38 +429,67 @@ void seqdump_on_present(UINT64 frame_number) {
     }
 
     if (!g_seq_armed) {
-        if (frame_number - g_seq_first_frame < SEQDUMP_ARM_FRAMES) {
-            return;
-        }
-        g_seq_armed = 1;
+        if (g_seq_armfile_mode) {
+            /* Live/manual arm (Task 5 addendum): check every ~30 frames
+             * whether seqarm.txt exists - a plain existence check
+             * (GetFileAttributesW), not an open, so it is cheap enough to
+             * poll from the render thread. Arms the instant it appears;
+             * default frame-301 auto-arm logic below is skipped entirely
+             * in this mode. */
+            wchar_t path[MAX_PATH];
 
-        {
-            /* Brief: "log ONE line at arm time saying whether the context
-             * QIs to ID3D11DeviceContext1" - this checks the REAL captured
-             * game context (as opposed to seqdump_install()'s own QI probe
-             * against the throwaway dummy context, used there to decide
-             * whether to hook VSSetConstantBuffers1 at all). */
-            const char *support = "unknown (real context not yet captured)";
-            if (d3d_capture_ready() && g_d3d.ctx != NULL) {
-                ID3D11DeviceContext1 *ctx1 = NULL;
-                HRESULT hr = ID3D11DeviceContext_QueryInterface(g_d3d.ctx, &IID_ID3D11DeviceContext1,
-                                                                  (void **)&ctx1);
-                if (SUCCEEDED(hr) && ctx1 != NULL) {
-                    support = "yes";
-                    ID3D11DeviceContext1_Release(ctx1);
-                } else {
-                    support = "no";
-                }
+            if ((frame_number % SEQDUMP_ARMFILE_CHECK_FRAMES) != 0) {
+                return;
             }
-            log_msg("seqdump: armed at frame %llu; real game context QIs to "
-                     "ID3D11DeviceContext1 = %s", (unsigned long long)frame_number, support);
+            seqarm_path(path, MAX_PATH);
+            if (path[0] == L'\0' || GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
+                return; /* not armed yet */
+            }
+
+            g_seq_armed = 1;
+            log_msg("seqdump: ARMED by seqarm.txt at frame %llu", (unsigned long long)frame_number);
             if (g_seq_fp != NULL) {
                 EnterCriticalSection(&g_seq_cs);
-                fprintf(g_seq_fp, "SEQDUMP ARMED at frame %llu; real-context "
-                         "QIs-to-ID3D11DeviceContext1=%s\n",
-                         (unsigned long long)frame_number, support);
+                fprintf(g_seq_fp, "SEQDUMP ARMED by seqarm.txt at frame %llu\n",
+                         (unsigned long long)frame_number);
                 fflush(g_seq_fp);
                 LeaveCriticalSection(&g_seq_cs);
+            }
+        } else {
+            if (frame_number - g_seq_first_frame < SEQDUMP_ARM_FRAMES) {
+                return;
+            }
+            g_seq_armed = 1;
+
+            {
+                /* Brief: "log ONE line at arm time saying whether the
+                 * context QIs to ID3D11DeviceContext1" - this checks the
+                 * REAL captured game context (as opposed to
+                 * seqdump_install()'s own QI probe against the throwaway
+                 * dummy context, used there to decide whether to hook
+                 * VSSetConstantBuffers1 at all). */
+                const char *support = "unknown (real context not yet captured)";
+                if (d3d_capture_ready() && g_d3d.ctx != NULL) {
+                    ID3D11DeviceContext1 *ctx1 = NULL;
+                    HRESULT hr = ID3D11DeviceContext_QueryInterface(g_d3d.ctx, &IID_ID3D11DeviceContext1,
+                                                                      (void **)&ctx1);
+                    if (SUCCEEDED(hr) && ctx1 != NULL) {
+                        support = "yes";
+                        ID3D11DeviceContext1_Release(ctx1);
+                    } else {
+                        support = "no";
+                    }
+                }
+                log_msg("seqdump: armed at frame %llu; real game context QIs to "
+                         "ID3D11DeviceContext1 = %s", (unsigned long long)frame_number, support);
+                if (g_seq_fp != NULL) {
+                    EnterCriticalSection(&g_seq_cs);
+                    fprintf(g_seq_fp, "SEQDUMP ARMED at frame %llu; real-context "
+                             "QIs-to-ID3D11DeviceContext1=%s\n",
+                             (unsigned long long)frame_number, support);
+                    fflush(g_seq_fp);
+                    LeaveCriticalSection(&g_seq_cs);
+                }
             }
         }
     }
@@ -498,6 +542,12 @@ void seqdump_install(ID3D11DeviceContext *dummy_ctx) {
     if (dummy_ctx == NULL) {
         log_msg("seqdump: TEWVR_SEQDUMP=1 but dummy context is NULL; skipping event-stream hooks");
         return;
+    }
+
+    {
+        char aflag[8];
+        DWORD alen = GetEnvironmentVariableA("TEWVR_SEQDUMP_ARMFILE", aflag, sizeof(aflag));
+        g_seq_armfile_mode = (alen > 0 && alen < sizeof(aflag) && strcmp(aflag, "1") == 0);
     }
 
     if (!seqdump_open_logfile()) {
@@ -567,13 +617,16 @@ void seqdump_install(ID3D11DeviceContext *dummy_ctx) {
                      ok_di || ok_d || ok_dii || ok_dinst;
 
     log_msg("seqdump: hooks map=%d unmap=%d update=%d vscb=%d vsset=%d di=%d d=%d dii=%d dinst=%d "
-             "vscb1=%d -> %s (arms %d frames after first Present, caps at %d events)",
+             "vscb1=%d -> %s (arm=%s, caps at %d events)",
              ok_map, ok_unmap, ok_update, ok_vscb, ok_vsset, ok_di, ok_d, ok_dii, ok_dinst, ok_vscb1,
-             g_seq_hooks_ok ? "ACTIVE" : "inactive", SEQDUMP_ARM_FRAMES, SEQDUMP_MAX_EVENTS);
+             g_seq_hooks_ok ? "ACTIVE" : "inactive",
+             g_seq_armfile_mode ? "seqarm.txt file-trigger" : "frame-301 auto",
+             SEQDUMP_MAX_EVENTS);
 
     if (g_seq_hooks_ok && g_seq_fp != NULL) {
-        fprintf(g_seq_fp, "TEWVR seqdump session start (TEWVR_SEQDUMP=1); hooks: map=%d unmap=%d "
+        fprintf(g_seq_fp, "TEWVR seqdump session start (TEWVR_SEQDUMP=1%s); hooks: map=%d unmap=%d "
                  "update=%d vscb=%d vsset=%d di=%d d=%d dii=%d dinst=%d vscb1=%d\n",
+                 g_seq_armfile_mode ? ", TEWVR_SEQDUMP_ARMFILE=1 (arm via seqarm.txt)" : "",
                  ok_map, ok_unmap, ok_update, ok_vscb, ok_vsset, ok_di, ok_d, ok_dii, ok_dinst, ok_vscb1);
         fflush(g_seq_fp);
     }
@@ -593,4 +646,26 @@ void seqdump_remove(void) {
 
     DeleteCriticalSection(&g_seq_cs);
     g_seq_cs_ready = 0;
+}
+
+void seqdump_clear_stale_armfile(void) {
+    wchar_t path[MAX_PATH];
+
+    seqarm_path(path, MAX_PATH);
+    if (path[0] == L'\0') {
+        return; /* LOCALAPPDATA unavailable; nothing we can do, and nothing to warn about */
+    }
+
+    if (!DeleteFileW(path)) {
+        DWORD err = GetLastError();
+        /* ERROR_FILE_NOT_FOUND/ERROR_PATH_NOT_FOUND are the expected common
+         * case (no stale file, or %LOCALAPPDATA%\TEWVR doesn't exist yet on
+         * a fresh machine) - silent. Anything else is unexpected but still
+         * fail-safe: log once and continue starting up regardless. */
+        if (err != ERROR_FILE_NOT_FOUND && err != ERROR_PATH_NOT_FOUND) {
+            log_msg("seqdump: failed to delete stale seqarm.txt (gle=%lu)", (unsigned long)err);
+        }
+    } else {
+        log_msg("seqdump: deleted stale seqarm.txt left over from a previous session");
+    }
 }
