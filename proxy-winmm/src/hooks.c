@@ -6,6 +6,7 @@
 #include "log.h"
 #include "d3d_capture.h"
 #include "cbdump.h"
+#include "shaderdump.h"
 
 Present_t g_present_orig = NULL;
 
@@ -76,6 +77,12 @@ cleanup:
          * created, before it is released below. See cbdump.h. */
         cbdump_install(ctx);
     }
+    if (dev && ctx) {
+        /* Temporary Task 4 shader-level RE instrumentation
+         * (TEWVR_SHADERDUMP=1 only); same throwaway-vtable contract.
+         * See shaderdump.h. */
+        shaderdump_install(dev, ctx);
+    }
     if (sc)  IDXGISwapChain_Release(sc);
     if (ctx) ID3D11DeviceContext_Release(ctx);
     if (dev) ID3D11Device_Release(dev);
@@ -124,5 +131,6 @@ void hooks_remove(void) {
      * still be live when cbdump tears down its own state. */
     mh_glue_shutdown();
     cbdump_remove();
+    shaderdump_remove();
     g_hooks_active = 0;
 }
