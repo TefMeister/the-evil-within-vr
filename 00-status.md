@@ -1,16 +1,17 @@
 # Status
 
-**Last updated: 2026-08-19 — Tasks 1–3 complete; Task 4 still open (and the earlier "view matrix" was a false lead).**
+**Last updated: 2026-08-19 (later session) — Task 4 SOLVED: we found how the world gets its position, by reading the shaders.**
 
-Honest update: the 384-byte "view matrix" we thought we'd found was actually a
-per-object model matrix (a cloth mesh on Sebastian), caught by testing it live.
-Today we mapped the render pipeline instead: the shared per-frame buffers are all
-screen-space (96 = lighting, 64 = colour, 128 = lighting), and **nothing shared
-moves the world geometry** — so the engine looks like it transforms geometry
-per-object (classic id Tech 5), which is the harder case for VR. See
-[06b-render-pipeline-findings.md](06b-render-pipeline-findings.md). Next up is
-proper shader/debugger reverse engineering to find exactly what positions world
-vertices, rather than poking buffers and watching the screen.
+The camera hunt is over. We dumped and disassembled the game's vertex shaders
+and read the answer straight out of the bytecode: every object is drawn with its
+own finished model-view-projection matrix, handed to the shader in a per-draw
+constant block under the name `mvpmatrix` (id Tech 5's parameter system, still
+alive inside Tango's engine). Better still, the maths collapses beautifully: a
+single fixed per-eye matrix multiplied onto every per-draw matrix gives a
+correct stereo eye view — no per-object understanding needed. The "harder engine
+class" from the last note has a one-matrix master key. Full story in
+[06c-reading-the-shaders.md](06c-reading-the-shaders.md). Next: find the right
+interception moment for that multiply, then render each frame twice — stereo.
 
 ---
 
