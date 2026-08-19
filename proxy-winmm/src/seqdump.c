@@ -1,0 +1,596 @@
+#include "seqdump.h"
+
+#include <stdio.h>
+#include <stdint.h>
+#include <stdarg.h>
+#include <string.h>
+
+#define COBJMACROS
+#include <d3d11_1.h>
+
+#include "MinHook.h"
+#include "minhook_glue.h"
+#include "log.h"
+#include "d3d_capture.h"
+#include "shaderdump.h"
+
+/* ---- vtable indices (same verified counting scheme as cbdump.c/shaderdump.c) ---- */
+#define VTBL_CTX_VSSETCONSTANTBUFFERS 7
+#define VTBL_CTX_VSSETSHADER          11
+#define VTBL_CTX_DRAWINDEXED          12
+#define VTBL_CTX_DRAW                 13
+#define VTBL_CTX_MAP                  14
+#define VTBL_CTX_UNMAP                15
+#define VTBL_CTX_DRAWINDEXEDINST      20
+#define VTBL_CTX_DRAWINST             21
+#define VTBL_CTX_UPDATESUBRESOURCE    48
+/* ID3D11DeviceContext1 vtable slot for VSSetConstantBuffers1 - given
+ * verbatim by the task-5 brief, not recomputed here. */
+#define VTBL_CTX1_VSSETCONSTANTBUFFERS1 120
+
+#define SEQDUMP_MAX_EVENTS  40000
+#define SEQDUMP_ARM_FRAMES  300
+#define SEQ_CB_MAX_BYTEWIDTH 8192
+
+typedef HRESULT(STDMETHODCALLTYPE *Map_t)(ID3D11DeviceContext *, ID3D11Resource *, UINT,
+                                           D3D11_MAP, UINT, D3D11_MAPPED_SUBRESOURCE *);
+typedef void(STDMETHODCALLTYPE *Unmap_t)(ID3D11DeviceContext *, ID3D11Resource *, UINT);
+typedef void(STDMETHODCALLTYPE *UpdateSubresource_t)(ID3D11DeviceContext *, ID3D11Resource *, UINT,
+                                                       const D3D11_BOX *, const void *, UINT, UINT);
+typedef void(STDMETHODCALLTYPE *VSSetCB_t)(ID3D11DeviceContext *, UINT, UINT, ID3D11Buffer *const *);
+typedef void(STDMETHODCALLTYPE *VSSetShader_t)(ID3D11DeviceContext *, ID3D11VertexShader *,
+                                                ID3D11ClassInstance *const *, UINT);
+typedef void(STDMETHODCALLTYPE *DrawIndexed_t)(ID3D11DeviceContext *, UINT, UINT, INT);
+typedef void(STDMETHODCALLTYPE *Draw_t)(ID3D11DeviceContext *, UINT, UINT);
+typedef void(STDMETHODCALLTYPE *DrawIndexedInst_t)(ID3D11DeviceContext *, UINT, UINT, UINT, INT, UINT);
+typedef void(STDMETHODCALLTYPE *DrawInst_t)(ID3D11DeviceContext *, UINT, UINT, UINT, UINT);
+typedef void(STDMETHODCALLTYPE *VSSetCB1_t)(ID3D11DeviceContext1 *, UINT, UINT, ID3D11Buffer *const *,
+                                             const UINT *, const UINT *);
+
+static Map_t g_map_orig = NULL;
+static Unmap_t g_unmap_orig = NULL;
+static UpdateSubresource_t g_update_orig = NULL;
+static VSSetCB_t g_vsset_cb_orig = NULL;
+static VSSetShader_t g_vsset_orig = NULL;
+static DrawIndexed_t g_drawindexed_orig = NULL;
+static Draw_t g_draw_orig = NULL;
+static DrawIndexedInst_t g_drawindexedinst_orig = NULL;
+static DrawInst_t g_drawinst_orig = NULL;
+static VSSetCB1_t g_vsset_cb1_orig = NULL;
+
+static int g_seq_installed = 0;
+static int g_seq_hooks_ok = 0; /* at least one of the hooks above installed + log open */
+
+/* Guards g_seq_fp, the sequence counter, the event/complete counters, and
+ * the Map->Unmap latch table. Contention is expected to be near-zero (the
+ * immediate context's calls all happen on the game's single render thread
+ * by D3D11 convention, same assumption cbdump.c documents), but this is
+ * diagnostic instrumentation capped at 40,000 events - a lock costs
+ * nothing here. */
+static CRITICAL_SECTION g_seq_cs;
+static int g_seq_cs_ready = 0;
+
+static FILE *g_seq_fp = NULL;
+static UINT64 g_seq_seqno = 0;
+static UINT64 g_seq_event_count = 0;
+static int g_seq_complete = 0;
+
+static int g_seq_first_frame_set = 0;
+static UINT64 g_seq_first_frame = 0;
+static int g_seq_armed = 0;
+
+/* Map->Unmap float shadow: "shadow only the most recent MAP per thread - a
+ * single-slot latch is fine" (brief). Small fixed table keyed by thread id;
+ * each thread gets exactly one slot, overwritten by its next MAP. */
+#define SEQ_LATCH_SIZE 8
+struct MapLatch {
+    DWORD tid;   /* 0 == free slot (0 is never a real thread id) */
+    ID3D11Resource *res;
+    void *data;
+    UINT byteWidth;
+};
+static struct MapLatch g_latch[SEQ_LATCH_SIZE];
+
+/* ---- helpers ---- */
+
+static int seq_active(void) {
+    return g_seq_hooks_ok && g_seq_armed && !g_seq_complete;
+}
+
+/* Only ID3D11Buffer resources with BindFlags & D3D11_BIND_CONSTANT_BUFFER
+ * and ByteWidth <= 8192, per the brief - deliberately not cbdump.c's
+ * size-range filter (that one doesn't check BindFlags at all). */
+static int resource_is_cb_le8192(ID3D11Resource *res, UINT *out_bw) {
+    D3D11_RESOURCE_DIMENSION dim;
+    ID3D11Buffer *buf = NULL;
+    D3D11_BUFFER_DESC desc;
+    HRESULT hr;
+
+    if (res == NULL) {
+        return 0;
+    }
+
+    ID3D11Resource_GetType(res, &dim);
+    if (dim != D3D11_RESOURCE_DIMENSION_BUFFER) {
+        return 0;
+    }
+
+    hr = ID3D11Resource_QueryInterface(res, &IID_ID3D11Buffer, (void **)&buf);
+    if (FAILED(hr) || buf == NULL) {
+        return 0;
+    }
+
+    ID3D11Buffer_GetDesc(buf, &desc);
+    ID3D11Buffer_Release(buf);
+
+    if (!(desc.BindFlags & D3D11_BIND_CONSTANT_BUFFER)) {
+        return 0;
+    }
+    if (desc.ByteWidth > SEQ_CB_MAX_BYTEWIDTH) {
+        return 0;
+    }
+    if (out_bw) {
+        *out_bw = desc.ByteWidth;
+    }
+    return 1;
+}
+
+/* ---- Map->Unmap latch (caller holds g_seq_cs) ---- */
+
+static void latch_store_locked(DWORD tid, ID3D11Resource *res, void *data, UINT bw) {
+    int i, free_slot = -1;
+    for (i = 0; i < SEQ_LATCH_SIZE; i++) {
+        if (g_latch[i].tid == tid) {
+            g_latch[i].res = res;
+            g_latch[i].data = data;
+            g_latch[i].byteWidth = bw;
+            return;
+        }
+        if (free_slot < 0 && g_latch[i].tid == 0) {
+            free_slot = i;
+        }
+    }
+    /* More than SEQ_LATCH_SIZE distinct threads mapping CBs concurrently is
+     * not expected on a single-render-thread D3D11 immediate context;
+     * overwrite slot 0 rather than drop silently if it ever happens - still
+     * "simple" per the brief, and this is discovery instrumentation, not
+     * the mod proper. */
+    if (free_slot < 0) {
+        free_slot = 0;
+    }
+    g_latch[free_slot].tid = tid;
+    g_latch[free_slot].res = res;
+    g_latch[free_slot].data = data;
+    g_latch[free_slot].byteWidth = bw;
+}
+
+/* Single-shot: on a match, clears the slot and returns 1. */
+static int latch_take_locked(DWORD tid, ID3D11Resource *res, void **out_data, UINT *out_bw) {
+    int i;
+    for (i = 0; i < SEQ_LATCH_SIZE; i++) {
+        if (g_latch[i].tid == tid) {
+            if (g_latch[i].res == res) {
+                *out_data = g_latch[i].data;
+                *out_bw = g_latch[i].byteWidth;
+                g_latch[i].tid = 0;
+                g_latch[i].res = NULL;
+                return 1;
+            }
+            return 0; /* this thread's latch holds a different resource: miss */
+        }
+    }
+    return 0;
+}
+
+/* ---- event log writer ----
+ * Two-phase API so multi-field events (VSSETCB, VSSETCB1) can build their
+ * line with several fprintf calls under one lock, while simple one-line
+ * events go through seq_line()'s single vfprintf. Both funnel through the
+ * same sequence numbering / 40,000-event cap / COMPLETE-line logic. */
+
+static int seq_begin_locked(void) {
+    if (!seq_active() || g_seq_fp == NULL) {
+        return 0;
+    }
+    EnterCriticalSection(&g_seq_cs);
+    if (g_seq_complete) {
+        LeaveCriticalSection(&g_seq_cs);
+        return 0;
+    }
+    g_seq_seqno++;
+    fprintf(g_seq_fp, "[%llu][tid=%lu] ", (unsigned long long)g_seq_seqno,
+             (unsigned long)GetCurrentThreadId());
+    return 1; /* still holding g_seq_cs */
+}
+
+/* Caller still holds g_seq_cs (from seq_begin_locked()); this releases it. */
+static void seq_finish_locked(int flush_now) {
+    fprintf(g_seq_fp, "\n");
+    g_seq_event_count++;
+    if (flush_now) {
+        fflush(g_seq_fp);
+    }
+    if (g_seq_event_count >= SEQDUMP_MAX_EVENTS) {
+        fprintf(g_seq_fp, "SEQDUMP COMPLETE (events=%llu)\n", (unsigned long long)g_seq_event_count);
+        fflush(g_seq_fp);
+        g_seq_complete = 1;
+    }
+    LeaveCriticalSection(&g_seq_cs);
+}
+
+static void seq_line(int flush_now, const char *fmt, ...) {
+    va_list ap;
+    if (!seq_begin_locked()) {
+        return;
+    }
+    va_start(ap, fmt);
+    vfprintf(g_seq_fp, fmt, ap);
+    va_end(ap);
+    seq_finish_locked(flush_now);
+}
+
+/* ---- detours ---- */
+
+static HRESULT STDMETHODCALLTYPE Hook_Map(ID3D11DeviceContext *ctx, ID3D11Resource *res, UINT sub,
+                                           D3D11_MAP mapType, UINT flags,
+                                           D3D11_MAPPED_SUBRESOURCE *mapped) {
+    HRESULT hr = g_map_orig(ctx, res, sub, mapType, flags, mapped);
+
+    if (seq_active() && SUCCEEDED(hr) && mapped != NULL && mapped->pData != NULL) {
+        UINT bw;
+        if (resource_is_cb_le8192(res, &bw)) {
+            DWORD tid = GetCurrentThreadId();
+            EnterCriticalSection(&g_seq_cs);
+            latch_store_locked(tid, res, mapped->pData, bw);
+            LeaveCriticalSection(&g_seq_cs);
+            seq_line(0, "MAP res=0x%llX bytewidth=%u maptype=%d",
+                      (unsigned long long)(uintptr_t)res, bw, (int)mapType);
+        }
+    }
+
+    return hr;
+}
+
+static void STDMETHODCALLTYPE Hook_Unmap(ID3D11DeviceContext *ctx, ID3D11Resource *res, UINT sub) {
+    if (seq_active()) {
+        UINT bw;
+        if (resource_is_cb_le8192(res, &bw)) {
+            DWORD tid = GetCurrentThreadId();
+            void *data = NULL;
+            UINT latched_bw = 0;
+            int got;
+
+            /* Read the shadowed data BEFORE calling through: the mapped
+             * pointer is only guaranteed valid until the real Unmap runs
+             * (same ordering constraint cbdump.c documents). */
+            EnterCriticalSection(&g_seq_cs);
+            got = latch_take_locked(tid, res, &data, &latched_bw);
+            LeaveCriticalSection(&g_seq_cs);
+
+            if (got && data != NULL && latched_bw >= 16) {
+                const float *f = (const float *)data;
+                seq_line(0, "UNMAP res=0x%llX bytewidth=%u floats=[%.4f %.4f %.4f %.4f]",
+                          (unsigned long long)(uintptr_t)res, bw,
+                          (double)f[0], (double)f[1], (double)f[2], (double)f[3]);
+            } else {
+                /* Latch miss (brief: "if the latch misses, log UNMAP
+                 * without floats"), or a mapped CB too small to hold 4
+                 * floats. */
+                seq_line(0, "UNMAP res=0x%llX bytewidth=%u floats=<none>",
+                          (unsigned long long)(uintptr_t)res, bw);
+            }
+        }
+    }
+
+    g_unmap_orig(ctx, res, sub);
+}
+
+static void STDMETHODCALLTYPE Hook_UpdateSubresource(ID3D11DeviceContext *ctx, ID3D11Resource *dst,
+                                                       UINT dstSub, const D3D11_BOX *box,
+                                                       const void *src, UINT rowPitch, UINT depthPitch) {
+    if (seq_active() && src != NULL) {
+        UINT bw;
+        if (resource_is_cb_le8192(dst, &bw)) {
+            if (bw >= 16) {
+                const float *f = (const float *)src;
+                seq_line(0, "UPDATESUB res=0x%llX bytewidth=%u floats=[%.4f %.4f %.4f %.4f]",
+                          (unsigned long long)(uintptr_t)dst, bw,
+                          (double)f[0], (double)f[1], (double)f[2], (double)f[3]);
+            } else {
+                seq_line(0, "UPDATESUB res=0x%llX bytewidth=%u floats=<none>",
+                          (unsigned long long)(uintptr_t)dst, bw);
+            }
+        }
+    }
+
+    g_update_orig(ctx, dst, dstSub, box, src, rowPitch, depthPitch);
+}
+
+static void STDMETHODCALLTYPE Hook_VSSetCB(ID3D11DeviceContext *ctx, UINT startSlot, UINT numBuffers,
+                                            ID3D11Buffer *const *ppCB) {
+    if (ppCB != NULL && seq_begin_locked()) {
+        UINT n = (numBuffers > 4) ? 4 : numBuffers;
+        UINT i;
+        fprintf(g_seq_fp, "VSSETCB start=%u num=%u", startSlot, numBuffers);
+        for (i = 0; i < n; i++) {
+            ID3D11Buffer *b = ppCB[i];
+            UINT bw = 0;
+            if (b != NULL) {
+                D3D11_BUFFER_DESC d;
+                ID3D11Buffer_GetDesc(b, &d);
+                bw = d.ByteWidth;
+            }
+            fprintf(g_seq_fp, " slot%u=0x%llX:%u", startSlot + i, (unsigned long long)(uintptr_t)b, bw);
+        }
+        seq_finish_locked(0);
+    }
+
+    g_vsset_cb_orig(ctx, startSlot, numBuffers, ppCB);
+}
+
+static void STDMETHODCALLTYPE Hook_VSSetShader(ID3D11DeviceContext *ctx, ID3D11VertexShader *vs,
+                                                ID3D11ClassInstance *const *inst, UINT n) {
+    if (seq_active()) {
+        uint64_t hash = shaderdump_hash_for_shader(vs);
+        if (hash != 0) {
+            seq_line(0, "VSSETSHADER ptr=0x%llX hash=%016llX",
+                      (unsigned long long)(uintptr_t)vs, (unsigned long long)hash);
+        } else {
+            seq_line(0, "VSSETSHADER ptr=0x%llX hash=?", (unsigned long long)(uintptr_t)vs);
+        }
+    }
+
+    g_vsset_orig(ctx, vs, inst, n);
+}
+
+static void STDMETHODCALLTYPE Hook_DrawIndexed(ID3D11DeviceContext *ctx, UINT idxCount, UINT startIdx,
+                                                INT baseVtx) {
+    if (seq_active()) {
+        seq_line(0, "DRAW variant=DrawIndexed count=%u", idxCount);
+    }
+    g_drawindexed_orig(ctx, idxCount, startIdx, baseVtx);
+}
+
+static void STDMETHODCALLTYPE Hook_Draw(ID3D11DeviceContext *ctx, UINT vtxCount, UINT startVtx) {
+    if (seq_active()) {
+        seq_line(0, "DRAW variant=Draw count=%u", vtxCount);
+    }
+    g_draw_orig(ctx, vtxCount, startVtx);
+}
+
+static void STDMETHODCALLTYPE Hook_DrawIndexedInst(ID3D11DeviceContext *ctx, UINT idxPerInst,
+                                                    UINT instCount, UINT startIdx, INT baseVtx,
+                                                    UINT startInst) {
+    if (seq_active()) {
+        seq_line(0, "DRAW variant=DrawIndexedInstanced count=%u instances=%u", idxPerInst, instCount);
+    }
+    g_drawindexedinst_orig(ctx, idxPerInst, instCount, startIdx, baseVtx, startInst);
+}
+
+static void STDMETHODCALLTYPE Hook_DrawInst(ID3D11DeviceContext *ctx, UINT vtxPerInst, UINT instCount,
+                                             UINT startVtx, UINT startInst) {
+    if (seq_active()) {
+        seq_line(0, "DRAW variant=DrawInstanced count=%u instances=%u", vtxPerInst, instCount);
+    }
+    g_drawinst_orig(ctx, vtxPerInst, instCount, startVtx, startInst);
+}
+
+static void STDMETHODCALLTYPE Hook_VSSetCB1(ID3D11DeviceContext1 *ctx, UINT startSlot, UINT numBuffers,
+                                             ID3D11Buffer *const *ppCB, const UINT *pFirstConstant,
+                                             const UINT *pNumConstants) {
+    if (ppCB != NULL && seq_begin_locked()) {
+        UINT n = (numBuffers > 4) ? 4 : numBuffers;
+        UINT i;
+        fprintf(g_seq_fp, "VSSETCB1 start=%u num=%u", startSlot, numBuffers);
+        for (i = 0; i < n; i++) {
+            ID3D11Buffer *b = ppCB[i];
+            UINT bw = 0;
+            UINT firstConst = pFirstConstant ? pFirstConstant[i] : 0;
+            UINT numConst = pNumConstants ? pNumConstants[i] : 0;
+            if (b != NULL) {
+                D3D11_BUFFER_DESC d;
+                ID3D11Buffer_GetDesc(b, &d);
+                bw = d.ByteWidth;
+            }
+            fprintf(g_seq_fp, " slot%u=0x%llX:%u firstConst=%u numConst=%u", startSlot + i,
+                     (unsigned long long)(uintptr_t)b, bw, firstConst, numConst);
+        }
+        seq_finish_locked(0);
+    }
+
+    g_vsset_cb1_orig(ctx, startSlot, numBuffers, ppCB, pFirstConstant, pNumConstants);
+}
+
+/* ---- Present-driven arming (called from hooks.c's Hook_Present) ---- */
+
+void seqdump_on_present(UINT64 frame_number) {
+    if (!g_seq_hooks_ok) {
+        return;
+    }
+
+    if (!g_seq_first_frame_set) {
+        g_seq_first_frame_set = 1;
+        g_seq_first_frame = frame_number;
+    }
+
+    if (!g_seq_armed) {
+        if (frame_number - g_seq_first_frame < SEQDUMP_ARM_FRAMES) {
+            return;
+        }
+        g_seq_armed = 1;
+
+        {
+            /* Brief: "log ONE line at arm time saying whether the context
+             * QIs to ID3D11DeviceContext1" - this checks the REAL captured
+             * game context (as opposed to seqdump_install()'s own QI probe
+             * against the throwaway dummy context, used there to decide
+             * whether to hook VSSetConstantBuffers1 at all). */
+            const char *support = "unknown (real context not yet captured)";
+            if (d3d_capture_ready() && g_d3d.ctx != NULL) {
+                ID3D11DeviceContext1 *ctx1 = NULL;
+                HRESULT hr = ID3D11DeviceContext_QueryInterface(g_d3d.ctx, &IID_ID3D11DeviceContext1,
+                                                                  (void **)&ctx1);
+                if (SUCCEEDED(hr) && ctx1 != NULL) {
+                    support = "yes";
+                    ID3D11DeviceContext1_Release(ctx1);
+                } else {
+                    support = "no";
+                }
+            }
+            log_msg("seqdump: armed at frame %llu; real game context QIs to "
+                     "ID3D11DeviceContext1 = %s", (unsigned long long)frame_number, support);
+            if (g_seq_fp != NULL) {
+                EnterCriticalSection(&g_seq_cs);
+                fprintf(g_seq_fp, "SEQDUMP ARMED at frame %llu; real-context "
+                         "QIs-to-ID3D11DeviceContext1=%s\n",
+                         (unsigned long long)frame_number, support);
+                fflush(g_seq_fp);
+                LeaveCriticalSection(&g_seq_cs);
+            }
+        }
+    }
+
+    seq_line(1 /* flush at Present boundaries */, "PRESENT frame=%llu", (unsigned long long)frame_number);
+}
+
+/* ---- setup / teardown ---- */
+
+static int seqdump_open_logfile(void) {
+    wchar_t local_appdata[MAX_PATH];
+    wchar_t dir[MAX_PATH];
+    wchar_t path[MAX_PATH];
+    DWORD len = GetEnvironmentVariableW(L"LOCALAPPDATA", local_appdata, MAX_PATH);
+
+    if (len == 0 || len >= MAX_PATH) {
+        return 0;
+    }
+
+    swprintf(dir, MAX_PATH, L"%s\\TEWVR", local_appdata);
+    if (!CreateDirectoryW(dir, NULL)) {
+        DWORD err = GetLastError();
+        if (err != ERROR_ALREADY_EXISTS) {
+            return 0;
+        }
+    }
+
+    swprintf(path, MAX_PATH, L"%s\\seqdump.log", dir);
+    g_seq_fp = _wfopen(path, L"w"); /* fresh per-session file, same convention as cbdump.log */
+    return g_seq_fp != NULL;
+}
+
+void seqdump_install(ID3D11DeviceContext *dummy_ctx) {
+    char flag[8];
+    DWORD len;
+    void **vtbl;
+    int ok_map, ok_unmap, ok_update, ok_vscb, ok_vsset, ok_di, ok_d, ok_dii, ok_dinst;
+    int ok_vscb1 = 0;
+
+    if (g_seq_installed) {
+        return; /* hooks.c only calls this once, but stay idempotent */
+    }
+    g_seq_installed = 1;
+
+    len = GetEnvironmentVariableA("TEWVR_SEQDUMP", flag, sizeof(flag));
+    if (len == 0 || len >= sizeof(flag) || strcmp(flag, "1") != 0) {
+        return; /* off by default: touch nothing */
+    }
+
+    if (dummy_ctx == NULL) {
+        log_msg("seqdump: TEWVR_SEQDUMP=1 but dummy context is NULL; skipping event-stream hooks");
+        return;
+    }
+
+    if (!seqdump_open_logfile()) {
+        log_msg("seqdump: failed to open seqdump.log; skipping event-stream hooks");
+        return;
+    }
+
+    InitializeCriticalSection(&g_seq_cs);
+    g_seq_cs_ready = 1;
+
+    if (!mh_glue_init()) {
+        log_msg("seqdump: MinHook init failed; skipping event-stream hooks");
+        return;
+    }
+
+    vtbl = *(void ***)dummy_ctx;
+
+    ok_map = mh_glue_create_and_enable(vtbl[VTBL_CTX_MAP], (void *)&Hook_Map, (void **)&g_map_orig,
+                                        "seqdump ID3D11DeviceContext::Map");
+    ok_unmap = mh_glue_create_and_enable(vtbl[VTBL_CTX_UNMAP], (void *)&Hook_Unmap, (void **)&g_unmap_orig,
+                                          "seqdump ID3D11DeviceContext::Unmap");
+    ok_update = mh_glue_create_and_enable(vtbl[VTBL_CTX_UPDATESUBRESOURCE], (void *)&Hook_UpdateSubresource,
+                                           (void **)&g_update_orig,
+                                           "seqdump ID3D11DeviceContext::UpdateSubresource");
+    ok_vscb = mh_glue_create_and_enable(vtbl[VTBL_CTX_VSSETCONSTANTBUFFERS], (void *)&Hook_VSSetCB,
+                                         (void **)&g_vsset_cb_orig,
+                                         "seqdump ID3D11DeviceContext::VSSetConstantBuffers");
+    ok_vsset = mh_glue_create_and_enable(vtbl[VTBL_CTX_VSSETSHADER], (void *)&Hook_VSSetShader,
+                                          (void **)&g_vsset_orig, "seqdump ID3D11DeviceContext::VSSetShader");
+    ok_di = mh_glue_create_and_enable(vtbl[VTBL_CTX_DRAWINDEXED], (void *)&Hook_DrawIndexed,
+                                       (void **)&g_drawindexed_orig, "seqdump ID3D11DeviceContext::DrawIndexed");
+    ok_d = mh_glue_create_and_enable(vtbl[VTBL_CTX_DRAW], (void *)&Hook_Draw, (void **)&g_draw_orig,
+                                      "seqdump ID3D11DeviceContext::Draw");
+    ok_dii = mh_glue_create_and_enable(vtbl[VTBL_CTX_DRAWINDEXEDINST], (void *)&Hook_DrawIndexedInst,
+                                        (void **)&g_drawindexedinst_orig,
+                                        "seqdump ID3D11DeviceContext::DrawIndexedInstanced");
+    ok_dinst = mh_glue_create_and_enable(vtbl[VTBL_CTX_DRAWINST], (void *)&Hook_DrawInst,
+                                          (void **)&g_drawinst_orig, "seqdump ID3D11DeviceContext::DrawInstanced");
+
+    {
+        /* Brief: "if the context supports ID3D11DeviceContext1 ... hook or
+         * at least probe VSSetConstantBuffers1 ... via the same vtable
+         * technique". Probed here against the DUMMY context (same
+         * shared-vtable trick every other hook in this codebase uses) so
+         * the hook installs are consistent regardless of when the real
+         * game context becomes available; seqdump_on_present() separately
+         * logs the REAL context's QI result at arm time per the brief's
+         * literal wording. */
+        ID3D11DeviceContext1 *ctx1 = NULL;
+        HRESULT hr = ID3D11DeviceContext_QueryInterface(dummy_ctx, &IID_ID3D11DeviceContext1,
+                                                          (void **)&ctx1);
+        if (SUCCEEDED(hr) && ctx1 != NULL) {
+            void **vtbl1 = *(void ***)ctx1;
+            ok_vscb1 = mh_glue_create_and_enable(vtbl1[VTBL_CTX1_VSSETCONSTANTBUFFERS1],
+                                                   (void *)&Hook_VSSetCB1, (void **)&g_vsset_cb1_orig,
+                                                   "seqdump ID3D11DeviceContext1::VSSetConstantBuffers1");
+            ID3D11DeviceContext1_Release(ctx1);
+            log_msg("seqdump: dummy context QIs to ID3D11DeviceContext1; VSSetConstantBuffers1 hook %s",
+                     ok_vscb1 ? "installed" : "failed");
+        } else {
+            log_msg("seqdump: dummy context does not QI to ID3D11DeviceContext1 (hr=0x%08lX); "
+                     "VSSetConstantBuffers1 not hooked", (unsigned long)hr);
+        }
+    }
+
+    g_seq_hooks_ok = ok_map || ok_unmap || ok_update || ok_vscb || ok_vsset ||
+                     ok_di || ok_d || ok_dii || ok_dinst;
+
+    log_msg("seqdump: hooks map=%d unmap=%d update=%d vscb=%d vsset=%d di=%d d=%d dii=%d dinst=%d "
+             "vscb1=%d -> %s (arms %d frames after first Present, caps at %d events)",
+             ok_map, ok_unmap, ok_update, ok_vscb, ok_vsset, ok_di, ok_d, ok_dii, ok_dinst, ok_vscb1,
+             g_seq_hooks_ok ? "ACTIVE" : "inactive", SEQDUMP_ARM_FRAMES, SEQDUMP_MAX_EVENTS);
+
+    if (g_seq_hooks_ok && g_seq_fp != NULL) {
+        fprintf(g_seq_fp, "TEWVR seqdump session start (TEWVR_SEQDUMP=1); hooks: map=%d unmap=%d "
+                 "update=%d vscb=%d vsset=%d di=%d d=%d dii=%d dinst=%d vscb1=%d\n",
+                 ok_map, ok_unmap, ok_update, ok_vscb, ok_vsset, ok_di, ok_d, ok_dii, ok_dinst, ok_vscb1);
+        fflush(g_seq_fp);
+    }
+}
+
+void seqdump_remove(void) {
+    if (!g_seq_cs_ready) {
+        return; /* seqdump_install() was never called, or TEWVR_SEQDUMP was unset */
+    }
+
+    g_seq_hooks_ok = 0;
+
+    if (g_seq_fp) {
+        fclose(g_seq_fp);
+        g_seq_fp = NULL;
+    }
+
+    DeleteCriticalSection(&g_seq_cs);
+    g_seq_cs_ready = 0;
+}
