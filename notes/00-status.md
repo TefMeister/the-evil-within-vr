@@ -1,7 +1,23 @@
 # The Evil Within VR — Status
 
-Last updated: 2026-08-20 (session 4: **TASK 5 RESOLVED** — the double-render
-strategy is decided, on the strength of a live experiment). The engine records
+Last updated: 2026-08-20 (session 4: **TASK 6 DISCOVERY CLOSED** — the world's
+per-object matrix is located). It lives in VS slot 0 (`constantBufferV`), at each
+shader's reflected `mvpmatrix` offset, inside a small pool of ~6 **persistently
+mapped** 1920-byte constant buffers (one ring per worker thread). The engine
+`memcpy`s per-object matrices into the persistent mapping — which is why no
+`Map`/`Unmap`/`UpdateSubresource` hook ever saw the writes. A draw-time buffer
+read (`TEWVR_CBPEEK`) confirmed the contents vary per object and are readable at
+record time. **This unblocks the patch:** at each deferred world draw, read the
+matrix, left-multiply by the per-eye `K_eye`, write it into our own buffer, and
+rebind slot 0 before the draw — Task 6's yaw proof and the stereo mechanism in
+one. Tasks 6 and 7 merge at this seam. Full write-up in
+[notes/08-world-mvp-located-persistent-cbuffer-ring.md](08-world-mvp-located-persistent-cbuffer-ring.md).
+**Next:** implement the per-draw matrix substitution and prove control with a
+deliberate yaw. (Earlier this session, **TASK 5 RESOLVED** — the double-render
+strategy: re-render per eye reaching the deferred-recorded world draws; see
+[notes/07-double-render-strategy.md](07-double-render-strategy.md).)
+
+The engine records
 each frame on **six deferred contexts across six worker threads**, and the
 immediate context replays those command lists (~200–300 `ExecuteCommandList`
 per frame). A live "skip the command lists" toggle proved what they contain:
