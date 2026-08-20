@@ -44,6 +44,10 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved) {
          * seqdump logic can run - so a leftover file can never prematurely
          * arm this (or a later) run. Cheap and fail-safe; see seqdump.h. */
         seqdump_clear_stale_armfile();
+        /* Task 5 addendum 3: same idea for the TEWVR_SKIPCL live-toggle
+         * control file - a leftover skipcl.txt must not silently start
+         * dropping command lists in a later session. */
+        seqdump_clear_stale_skipcl();
 
         {
             HANDLE h = CreateThread(NULL, 0, bootstrap_thread, NULL, 0, NULL);

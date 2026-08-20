@@ -23,16 +23,20 @@
 #define VTBL_CTX_UNMAP                15
 #define VTBL_CTX_DRAWINDEXEDINST      20
 #define VTBL_CTX_DRAWINST             21
+#define VTBL_CTX_OMSETRENDERTARGETS   33
+#define VTBL_CTX_RSSETVIEWPORTS       44
 #define VTBL_CTX_UPDATESUBRESOURCE    48
 /* ExecuteCommandList / FinishCommandList (Task 5 review addendum 2):
  * counted directly (0-based) from the llvm-mingw toolchain's own d3d11.h
  * ID3D11DeviceContextVtbl struct, method-by-method from QueryInterface=0 -
  * not recomputed by formula, to avoid a miscount. ExecuteCommandList lands
  * at index 58; FinishCommandList is the LAST method in the whole vtable,
- * at index 114. Cross-check: this same counting pass also lands
- * VSSetConstantBuffers at 7 and UpdateSubresource at 48, exactly matching
- * cbdump.c's/shaderdump.c's already-verified indices for those two -
- * confirming the count is right before trusting the two new ones. */
+ * at index 114. OMSetRenderTargets (33) and RSSetViewports (44) (addendum
+ * 3) were counted the same pass. Cross-check: this same counting pass
+ * also lands VSSetConstantBuffers at 7 and UpdateSubresource at 48,
+ * exactly matching cbdump.c's/shaderdump.c's already-verified indices for
+ * those two - confirming the count is right before trusting the new
+ * ones. */
 #define VTBL_CTX_EXECUTECOMMANDLIST   58
 #define VTBL_CTX_FINISHCOMMANDLIST    114
 /* ID3D11DeviceContext1 vtable slot for VSSetConstantBuffers1 - given
@@ -43,6 +47,7 @@
 #define SEQDUMP_ARM_FRAMES  300
 #define SEQDUMP_ARMFILE_CHECK_FRAMES 30
 #define SEQ_CB_MAX_BYTEWIDTH 8192
+#define SEQ_SKIPCL_RECHECK_CALLS 30
 
 typedef HRESULT(STDMETHODCALLTYPE *Map_t)(ID3D11DeviceContext *, ID3D11Resource *, UINT,
                                            D3D11_MAP, UINT, D3D11_MAPPED_SUBRESOURCE *);
@@ -60,12 +65,39 @@ typedef void(STDMETHODCALLTYPE *VSSetCB1_t)(ID3D11DeviceContext1 *, UINT, UINT, 
                                              const UINT *, const UINT *);
 typedef HRESULT(STDMETHODCALLTYPE *FinishCommandList_t)(ID3D11DeviceContext *, WINBOOL, ID3D11CommandList **);
 typedef void(STDMETHODCALLTYPE *ExecuteCommandList_t)(ID3D11DeviceContext *, ID3D11CommandList *, WINBOOL);
+typedef void(STDMETHODCALLTYPE *RSSetViewports_t)(ID3D11DeviceContext *, UINT, const D3D11_VIEWPORT *);
+typedef void(STDMETHODCALLTYPE *OMSetRenderTargets_t)(ID3D11DeviceContext *, UINT,
+                                                       ID3D11RenderTargetView *const *,
+                                                       ID3D11DepthStencilView *);
 
-static Map_t g_map_orig = NULL;
-static Unmap_t g_unmap_orig = NULL;
+/* Forward declarations: seq_maybe_late_hook_deferred_ctx() (Task 5
+ * addendum 3, defined well before these in file order alongside the rest
+ * of the deferred-context-discovery helpers) needs to pass these six
+ * detour functions to MinHook by address. */
+static HRESULT STDMETHODCALLTYPE Hook_Map(ID3D11DeviceContext *, ID3D11Resource *, UINT, D3D11_MAP, UINT,
+                                           D3D11_MAPPED_SUBRESOURCE *);
+static void STDMETHODCALLTYPE Hook_Unmap(ID3D11DeviceContext *, ID3D11Resource *, UINT);
+static void STDMETHODCALLTYPE Hook_VSSetCB(ID3D11DeviceContext *, UINT, UINT, ID3D11Buffer *const *);
+static void STDMETHODCALLTYPE Hook_VSSetShader(ID3D11DeviceContext *, ID3D11VertexShader *,
+                                                ID3D11ClassInstance *const *, UINT);
+static void STDMETHODCALLTYPE Hook_RSSetViewports(ID3D11DeviceContext *, UINT, const D3D11_VIEWPORT *);
+static void STDMETHODCALLTYPE Hook_OMSetRenderTargets(ID3D11DeviceContext *, UINT,
+                                                       ID3D11RenderTargetView *const *,
+                                                       ID3D11DepthStencilView *);
+
+/* Single-target hooks: DrawIndexed/Draw/DrawIndexedInstanced/DrawInstanced/
+ * FinishCommandList/ExecuteCommandList happen to share ONE implementation
+ * address across the immediate and deferred vtable flavors (confirmed by
+ * the addendum-2 capture: FinishCommandList fired with a ctx pointer
+ * whose vtable was never explicitly hooked), so a single original
+ * function pointer, captured once at install time on the immediate
+ * vtable, is correct to call through regardless of which flavor of ctx
+ * invoked the detour. VSSetShader/VSSetConstantBuffers/Map/Unmap/
+ * RSSetViewports/OMSetRenderTargets are NOT guaranteed to share an
+ * address across flavors (see the address-keyed g_hooked_funcs table
+ * below) and so use a lookup-by-address dispatch instead of a single
+ * static original. */
 static UpdateSubresource_t g_update_orig = NULL;
-static VSSetCB_t g_vsset_cb_orig = NULL;
-static VSSetShader_t g_vsset_orig = NULL;
 static DrawIndexed_t g_drawindexed_orig = NULL;
 static Draw_t g_draw_orig = NULL;
 static DrawIndexedInst_t g_drawindexedinst_orig = NULL;
@@ -77,12 +109,12 @@ static ExecuteCommandList_t g_executecmdlist_orig = NULL;
 static int g_seq_installed = 0;
 static int g_seq_hooks_ok = 0; /* at least one of the hooks above installed + log open */
 
-/* Guards g_seq_fp, the sequence counter, the event/complete counters, and
- * the Map->Unmap latch table. Contention is expected to be near-zero (the
- * immediate context's calls all happen on the game's single render thread
- * by D3D11 convention, same assumption cbdump.c documents), but this is
- * diagnostic instrumentation capped at 40,000 events - a lock costs
- * nothing here. */
+/* Guards g_seq_fp, the sequence counter, the event/complete counters, the
+ * Map->Unmap latch table, and (Task 5 addendum 3) the address-keyed
+ * hooked-function table and the seen-ctx table. Contention is expected to
+ * stay low even with deferred-context worker threads now in the mix
+ * (each table is tiny and only scanned linearly), but this is diagnostic
+ * instrumentation capped at 40,000 events - a lock costs nothing here. */
 static CRITICAL_SECTION g_seq_cs;
 static int g_seq_cs_ready = 0;
 
@@ -96,6 +128,48 @@ static UINT64 g_seq_first_frame = 0;
 static int g_seq_armed = 0;
 static int g_seq_armfile_mode = 0; /* TEWVR_SEQDUMP_ARMFILE=1: arm via seqarm.txt instead of frame-301 */
 
+/* ---- address-keyed hooked-function table (Task 5 addendum 3) ----
+ * The gameplay capture showed world-geometry draws recorded on deferred
+ * contexts whose VSSetShader/VSSetConstantBuffers/Map/Unmap/
+ * RSSetViewports/OMSetRenderTargets state calls our (immediate-vtable-
+ * only) hooks never saw. The FIRST design here keyed the dispatch table
+ * by the calling ctx's own VTABLE pointer, on the assumption that these
+ * six functions never share an underlying implementation address between
+ * the immediate and deferred vtable flavors (unlike the Draw variants,
+ * FinishCommandList, and ExecuteCommandList, which do). A live smoke test
+ * proved that assumption wrong for at least some of these six on this
+ * engine/driver: real calls arrived on a deferred ctx whose vtable had
+ * not yet been late-hooked, meaning the underlying address WAS already
+ * hooked (via the immediate vtable) even though the deferred ctx's own
+ * vtable pointer was never registered - the vtable-pointer-keyed lookup
+ * returned "not found" and the call was WRONGLY dropped.
+ *
+ * Fixed by keying the table on the raw target ADDRESS instead of the
+ * vtable pointer - the address is the one thing that is always correct
+ * to key on, since MinHook hooks (and therefore every original/
+ * trampoline) are fundamentally per-address, not per-vtable-instance.
+ * Each detour looks up `(*(void***)ctx)[SLOT]` (the address THIS call
+ * actually went through) and finds whichever original was registered for
+ * that address, whether it was first hooked via the immediate vtable or
+ * a late-hooked deferred one - correct regardless of how many distinct
+ * vtable pointers happen to share that address. */
+#define SEQ_MAX_HOOKED_FUNCS 32
+struct HookedFunc {
+    void *addr; /* NULL == free slot; the raw target function address */
+    void *orig; /* the trampoline MinHook gave us for that address */
+};
+static struct HookedFunc g_hooked_funcs[SEQ_MAX_HOOKED_FUNCS];
+static int g_hooked_funcs_count = 0;
+static void *g_immediate_vtbl = NULL; /* captured at install time from dummy_ctx */
+
+/* Tracks which ctx pointers have already been inspected for late-hooking,
+ * so the (locked) vtable comparison only ever runs once per distinct ctx
+ * instance, not on every single Draw/FinishCommandList call. */
+#define SEQ_SEEN_CTX_MAX 32
+static void *g_seen_ctx[SEQ_SEEN_CTX_MAX];
+static int g_seen_ctx_count = 0;
+static int g_seen_ctx_full_warned = 0;
+
 /* Map->Unmap float shadow: "shadow only the most recent MAP per thread - a
  * single-slot latch is fine" (brief). Small fixed table keyed by thread id;
  * each thread gets exactly one slot, overwritten by its next MAP. */
@@ -107,6 +181,10 @@ struct MapLatch {
     UINT byteWidth;
 };
 static struct MapLatch g_latch[SEQ_LATCH_SIZE];
+
+/* Live SKIPCL visual toggle (Task 5 addendum 3) - see Hook_ExecuteCommandList. */
+static int g_skipcl_call_count = 0;
+static int g_skipcl_active = 0;
 
 /* ---- helpers ---- */
 
@@ -125,6 +203,19 @@ static void seqarm_path(wchar_t *out, size_t out_count) {
         return;
     }
     swprintf(out, out_count, L"%s\\TEWVR\\seqarm.txt", la);
+}
+
+/* Fills `out` with %LOCALAPPDATA%\TEWVR\skipcl.txt. Same contract as
+ * seqarm_path(); shared by the live SKIPCL toggle and
+ * seqdump_clear_stale_skipcl(). */
+static void skipcl_path(wchar_t *out, size_t out_count) {
+    wchar_t la[MAX_PATH];
+    DWORD len = GetEnvironmentVariableW(L"LOCALAPPDATA", la, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) {
+        out[0] = L'\0';
+        return;
+    }
+    swprintf(out, out_count, L"%s\\TEWVR\\skipcl.txt", la);
 }
 
 /* Only ID3D11Buffer resources with BindFlags & D3D11_BIND_CONSTANT_BUFFER
@@ -163,6 +254,97 @@ static int resource_is_cb_le8192(ID3D11Resource *res, UINT *out_bw) {
         *out_bw = desc.ByteWidth;
     }
     return 1;
+}
+
+/* Describes a render-target/depth-stencil resource as "WxHxFMT", or "?" if
+ * NULL or not a Texture2D (the overwhelming majority of render targets
+ * and depth buffers are Texture2D; anything else is out of scope for
+ * this diagnostic per the addendum - "if not a Texture2D, log rt0=?").
+ * Always releases whatever it QIs. */
+static void describe_texture2d(ID3D11Resource *res, char *buf, size_t buflen) {
+    ID3D11Texture2D *tex = NULL;
+    HRESULT hr;
+
+    if (res == NULL) {
+        snprintf(buf, buflen, "?");
+        return;
+    }
+
+    hr = ID3D11Resource_QueryInterface(res, &IID_ID3D11Texture2D, (void **)&tex);
+    if (FAILED(hr) || tex == NULL) {
+        snprintf(buf, buflen, "?");
+        return;
+    }
+
+    {
+        D3D11_TEXTURE2D_DESC d;
+        ID3D11Texture2D_GetDesc(tex, &d);
+        snprintf(buf, buflen, "%ux%ux%d", (unsigned)d.Width, (unsigned)d.Height, (int)d.Format);
+    }
+    ID3D11Texture2D_Release(tex);
+}
+
+/* ---- address-keyed hooked-function table (caller holds g_seq_cs unless noted) ---- */
+
+static void *find_hooked_orig_locked(void *addr) {
+    int i;
+    for (i = 0; i < g_hooked_funcs_count; i++) {
+        if (g_hooked_funcs[i].addr == addr) {
+            return g_hooked_funcs[i].orig;
+        }
+    }
+    return NULL;
+}
+
+static void register_hooked_func_locked(void *addr, void *orig) {
+    if (g_hooked_funcs_count < SEQ_MAX_HOOKED_FUNCS) {
+        g_hooked_funcs[g_hooked_funcs_count].addr = addr;
+        g_hooked_funcs[g_hooked_funcs_count].orig = orig;
+        g_hooked_funcs_count++;
+    }
+}
+
+/* Hooks `target` with `detour`, OR - if that exact address is already
+ * hooked (a different vtable sharing the function's address, or a race
+ * with another thread hooking the same address concurrently) - reuses
+ * the EXISTING original instead of attempting (and safely failing) a
+ * redundant MH_CreateHook call. Always fills `*out_orig` with a valid
+ * original and returns 1 on success (fresh hook OR reuse); returns 0 only
+ * if a genuinely fresh hook attempt failed AND no racing thread's
+ * concurrent attempt succeeded either (checked again after our own
+ * attempt, to close that race). Caller holds no lock (this takes
+ * g_seq_cs itself, briefly, around each table access - the MinHook call
+ * itself runs unlocked). */
+static int hook_or_reuse_locked_guard(void *target, void *detour, void **out_orig, const char *name) {
+    void *existing;
+
+    EnterCriticalSection(&g_seq_cs);
+    existing = find_hooked_orig_locked(target);
+    LeaveCriticalSection(&g_seq_cs);
+
+    if (existing != NULL) {
+        *out_orig = existing;
+        return 1;
+    }
+
+    {
+        void *orig = NULL;
+        int ok = mh_glue_create_and_enable(target, detour, &orig, name);
+
+        EnterCriticalSection(&g_seq_cs);
+        existing = find_hooked_orig_locked(target);
+        if (existing == NULL && ok) {
+            register_hooked_func_locked(target, orig);
+            existing = orig;
+        }
+        LeaveCriticalSection(&g_seq_cs);
+
+        if (existing != NULL) {
+            *out_orig = existing;
+            return 1;
+        }
+        return 0;
+    }
 }
 
 /* ---- Map->Unmap latch (caller holds g_seq_cs) ---- */
@@ -218,7 +400,7 @@ static int latch_take_locked(DWORD tid, ID3D11Resource *res, void **out_data, UI
  * events go through seq_line()'s single vfprintf. Both funnel through the
  * same sequence numbering / 40,000-event cap / COMPLETE-line logic.
  *
- * Task 5 review addendum 2: every event line now also carries the D3D11
+ * Task 5 review addendum 2: every event line also carries the D3D11
  * device-context pointer the event fired on (right after tid, before the
  * event body), so a later analysis pass can tell immediate-context state
  * calls apart from deferred-context command-list recording on other
@@ -268,12 +450,178 @@ static void seq_line(const void *ctx_ptr, int flush_now, const char *fmt, ...) {
     seq_finish_locked(flush_now);
 }
 
+/* ---- deferred-context discovery + late hooking (Task 5 addendum 3) ----
+ *
+ * Reads `ctx`'s own vtable pointer and, if it differs from the immediate
+ * context's (captured at seqdump_install() time as g_immediate_vtbl),
+ * MinHook-installs fresh hooks on THAT vtable's VSSetShader/
+ * VSSetConstantBuffers/Map/Unmap/RSSetViewports/OMSetRenderTargets slots -
+ * reusing the exact same detour functions (they already log the `ctx`
+ * argument they were called with, so events self-identify which flavor
+ * produced them; see the address-keyed g_hooked_funcs dispatch each of
+ * those detours does).
+ *
+ * Called from Hook_DrawIndexed/Draw/DrawIndexedInst/DrawInst and
+ * Hook_FinishCommandList - "the FINISHCMDLIST and DRAW hooks are the ones
+ * deferred contexts reach" per the addendum, because those six functions'
+ * addresses happen to be SHARED between immediate and deferred vtables
+ * (unlike the six being late-hooked here), so our existing single-target
+ * hooks on them already fire for deferred-context calls without any
+ * special handling. ("Those six functions" = the four Draw variants plus
+ * FinishCommandList and ExecuteCommandList.)
+ *
+ * Runs regardless of seq_active() (deliberately NOT gated on
+ * armed/capture state) - the goal is for a deferred vtable to already be
+ * hooked by the time capture arms, not to race the arm. Cheap and
+ * fail-safe throughout, exactly like every other hook-install path in
+ * this codebase: any failure just logs and leaves that vtable's state
+ * calls unseen; never crashes; never blocks or alters the calling draw/
+ * FinishCommandList call itself (the caller still calls through to the
+ * real original normally either way, this function only adds hooks for
+ * FUTURE calls on other functions). Safe to call from inside a live
+ * detour - MH_CreateHook/MH_EnableHook at runtime on a currently-
+ * unrelated target is an ordinary MinHook operation. */
+static void seq_maybe_late_hook_deferred_ctx(ID3D11DeviceContext *ctx) {
+    void **vtbl;
+    int is_new;
+
+    if (ctx == NULL || !g_seq_hooks_ok) {
+        return;
+    }
+
+    EnterCriticalSection(&g_seq_cs);
+    is_new = 1;
+    {
+        int i;
+        for (i = 0; i < g_seen_ctx_count; i++) {
+            if (g_seen_ctx[i] == (void *)ctx) {
+                is_new = 0;
+                break;
+            }
+        }
+        if (is_new) {
+            if (g_seen_ctx_count < SEQ_SEEN_CTX_MAX) {
+                g_seen_ctx[g_seen_ctx_count++] = (void *)ctx;
+            } else {
+                is_new = 0; /* table full: stop retrying vtable inspection for further unknown ctx pointers */
+                if (!g_seen_ctx_full_warned) {
+                    g_seen_ctx_full_warned = 1;
+                    log_msg("seqdump: seen-ctx table full (%d); further unknown contexts "
+                             "won't be inspected for late-hooking", SEQ_SEEN_CTX_MAX);
+                }
+            }
+        }
+    }
+    LeaveCriticalSection(&g_seq_cs);
+
+    if (!is_new) {
+        return;
+    }
+
+    vtbl = *(void ***)ctx;
+    if ((void *)vtbl == g_immediate_vtbl) {
+        return; /* same flavor as the immediate context: already covered */
+    }
+
+    /* hook_or_reuse_locked_guard() is idempotent and address-keyed, so
+     * calling it again for a vtable/address combination already covered
+     * (by an earlier ctx instance sharing this same vtable, or because
+     * one of these addresses happens to be shared with the immediate
+     * vtable - the bug this address-keyed design fixes) is always safe
+     * and cheap: it just returns the existing original without touching
+     * MinHook again. No separate "is this vtable already registered"
+     * gate is needed before calling it. */
+    {
+        VSSetShader_t vsset_o = NULL;
+        VSSetCB_t vscb_o = NULL;
+        Map_t map_o = NULL;
+        Unmap_t unmap_o = NULL;
+        RSSetViewports_t rsvp_o = NULL;
+        OMSetRenderTargets_t omrt_o = NULL;
+        int ok_vsset, ok_vscb, ok_map, ok_unmap, ok_rsvp, ok_omrt;
+
+        ok_vsset = hook_or_reuse_locked_guard(vtbl[VTBL_CTX_VSSETSHADER], (void *)&Hook_VSSetShader,
+                                               (void **)&vsset_o,
+                                               "seqdump (deferred) ID3D11DeviceContext::VSSetShader");
+        ok_vscb = hook_or_reuse_locked_guard(vtbl[VTBL_CTX_VSSETCONSTANTBUFFERS], (void *)&Hook_VSSetCB,
+                                              (void **)&vscb_o,
+                                              "seqdump (deferred) ID3D11DeviceContext::VSSetConstantBuffers");
+        ok_map = hook_or_reuse_locked_guard(vtbl[VTBL_CTX_MAP], (void *)&Hook_Map, (void **)&map_o,
+                                             "seqdump (deferred) ID3D11DeviceContext::Map");
+        ok_unmap = hook_or_reuse_locked_guard(vtbl[VTBL_CTX_UNMAP], (void *)&Hook_Unmap, (void **)&unmap_o,
+                                               "seqdump (deferred) ID3D11DeviceContext::Unmap");
+        ok_rsvp = hook_or_reuse_locked_guard(vtbl[VTBL_CTX_RSSETVIEWPORTS], (void *)&Hook_RSSetViewports,
+                                              (void **)&rsvp_o,
+                                              "seqdump (deferred) ID3D11DeviceContext::RSSetViewports");
+        ok_omrt = hook_or_reuse_locked_guard(vtbl[VTBL_CTX_OMSETRENDERTARGETS], (void *)&Hook_OMSetRenderTargets,
+                                              (void **)&omrt_o,
+                                              "seqdump (deferred) ID3D11DeviceContext::OMSetRenderTargets");
+
+        log_msg("seqdump: inspected deferred-context vtable %p (immediate vtbl is %p): "
+                 "vsset=%d vscb=%d map=%d unmap=%d rsvp=%d omrt=%d (1=hooked-or-already-covered)",
+                 (void *)vtbl, g_immediate_vtbl, ok_vsset, ok_vscb, ok_map, ok_unmap, ok_rsvp, ok_omrt);
+        (void)vsset_o;
+        (void)vscb_o;
+        (void)map_o;
+        (void)unmap_o;
+        (void)rsvp_o;
+        (void)omrt_o;
+    }
+}
+
+/* Live SKIPCL visual probe (Task 5 addendum 3) - reuses cbdump.c's
+ * probe.txt live-control pattern (a small file whose mere existence
+ * toggles behavior, re-checked periodically rather than every call).
+ * Re-checks skipcl.txt's existence every SEQ_SKIPCL_RECHECK_CALLS
+ * ExecuteCommandList calls (a cheap GetFileAttributesW, not an open),
+ * caching the result between checks. Must work regardless of seqdump's
+ * own armed/capture state - the skip behavior itself is a standalone
+ * live visual toggle for whenever TEWVR_SEQDUMP=1, not gated on capture
+ * being active (only the SKIPPED *log line* is gated on that, per the
+ * addendum: "respect the 40k cap by logging these only while capture
+ * active"). */
+static int seq_skipcl_should_skip(void) {
+    wchar_t path[MAX_PATH];
+
+    g_skipcl_call_count++;
+    if (g_skipcl_call_count != 1 && (g_skipcl_call_count % SEQ_SKIPCL_RECHECK_CALLS) != 0) {
+        return g_skipcl_active;
+    }
+
+    skipcl_path(path, MAX_PATH);
+    g_skipcl_active = (path[0] != L'\0' && GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES);
+    return g_skipcl_active;
+}
+
 /* ---- detours ---- */
 
 static HRESULT STDMETHODCALLTYPE Hook_Map(ID3D11DeviceContext *ctx, ID3D11Resource *res, UINT sub,
                                            D3D11_MAP mapType, UINT flags,
                                            D3D11_MAPPED_SUBRESOURCE *mapped) {
-    HRESULT hr = g_map_orig(ctx, res, sub, mapType, flags, mapped);
+    Map_t orig;
+    HRESULT hr;
+
+    EnterCriticalSection(&g_seq_cs);
+    orig = (Map_t)find_hooked_orig_locked((*(void ***)ctx)[VTBL_CTX_MAP]);
+    LeaveCriticalSection(&g_seq_cs);
+
+    if (orig == NULL) {
+        /* Should be unreachable: this detour only ever runs because
+         * MinHook redirected a call FROM some address to it, and every
+         * address we ever pass to MH_CreateHook for this detour is
+         * registered into g_hooked_funcs in the same breath
+         * (seqdump_install()/seq_maybe_late_hook_deferred_ctx() via
+         * hook_or_reuse_locked_guard()). Map has a return value + out-
+         * param the caller depends on; we cannot safely fabricate a
+         * mapped pointer, so the only fail-safe option left is a generic
+         * failure HRESULT rather than risking a crash by guessing which
+         * original to call. */
+        log_msg("seqdump: BUG - no Map original for ctx=%p vtbl=%p; call dropped",
+                 (void *)ctx, *(void ***)ctx);
+        return E_FAIL;
+    }
+
+    hr = orig(ctx, res, sub, mapType, flags, mapped);
 
     if (seq_active() && SUCCEEDED(hr) && mapped != NULL && mapped->pData != NULL) {
         UINT bw;
@@ -291,6 +639,8 @@ static HRESULT STDMETHODCALLTYPE Hook_Map(ID3D11DeviceContext *ctx, ID3D11Resour
 }
 
 static void STDMETHODCALLTYPE Hook_Unmap(ID3D11DeviceContext *ctx, ID3D11Resource *res, UINT sub) {
+    Unmap_t orig;
+
     if (seq_active()) {
         UINT bw;
         if (resource_is_cb_le8192(res, &bw)) {
@@ -321,7 +671,16 @@ static void STDMETHODCALLTYPE Hook_Unmap(ID3D11DeviceContext *ctx, ID3D11Resourc
         }
     }
 
-    g_unmap_orig(ctx, res, sub);
+    EnterCriticalSection(&g_seq_cs);
+    orig = (Unmap_t)find_hooked_orig_locked((*(void ***)ctx)[VTBL_CTX_UNMAP]);
+    LeaveCriticalSection(&g_seq_cs);
+
+    if (orig != NULL) {
+        orig(ctx, res, sub);
+    } else {
+        log_msg("seqdump: BUG - no Unmap original for ctx=%p vtbl=%p; call dropped",
+                 (void *)ctx, *(void ***)ctx);
+    }
 }
 
 static void STDMETHODCALLTYPE Hook_UpdateSubresource(ID3D11DeviceContext *ctx, ID3D11Resource *dst,
@@ -347,6 +706,8 @@ static void STDMETHODCALLTYPE Hook_UpdateSubresource(ID3D11DeviceContext *ctx, I
 
 static void STDMETHODCALLTYPE Hook_VSSetCB(ID3D11DeviceContext *ctx, UINT startSlot, UINT numBuffers,
                                             ID3D11Buffer *const *ppCB) {
+    VSSetCB_t orig;
+
     if (ppCB != NULL && seq_begin_locked(ctx)) {
         UINT n = (numBuffers > 4) ? 4 : numBuffers;
         UINT i;
@@ -364,11 +725,22 @@ static void STDMETHODCALLTYPE Hook_VSSetCB(ID3D11DeviceContext *ctx, UINT startS
         seq_finish_locked(0);
     }
 
-    g_vsset_cb_orig(ctx, startSlot, numBuffers, ppCB);
+    EnterCriticalSection(&g_seq_cs);
+    orig = (VSSetCB_t)find_hooked_orig_locked((*(void ***)ctx)[VTBL_CTX_VSSETCONSTANTBUFFERS]);
+    LeaveCriticalSection(&g_seq_cs);
+
+    if (orig != NULL) {
+        orig(ctx, startSlot, numBuffers, ppCB);
+    } else {
+        log_msg("seqdump: BUG - no VSSetConstantBuffers original for ctx=%p vtbl=%p; call dropped",
+                 (void *)ctx, *(void ***)ctx);
+    }
 }
 
 static void STDMETHODCALLTYPE Hook_VSSetShader(ID3D11DeviceContext *ctx, ID3D11VertexShader *vs,
                                                 ID3D11ClassInstance *const *inst, UINT n) {
+    VSSetShader_t orig;
+
     if (seq_active()) {
         uint64_t hash = shaderdump_hash_for_shader(vs);
         if (hash != 0) {
@@ -379,11 +751,91 @@ static void STDMETHODCALLTYPE Hook_VSSetShader(ID3D11DeviceContext *ctx, ID3D11V
         }
     }
 
-    g_vsset_orig(ctx, vs, inst, n);
+    EnterCriticalSection(&g_seq_cs);
+    orig = (VSSetShader_t)find_hooked_orig_locked((*(void ***)ctx)[VTBL_CTX_VSSETSHADER]);
+    LeaveCriticalSection(&g_seq_cs);
+
+    if (orig != NULL) {
+        orig(ctx, vs, inst, n);
+    } else {
+        log_msg("seqdump: BUG - no VSSetShader original for ctx=%p vtbl=%p; call dropped",
+                 (void *)ctx, *(void ***)ctx);
+    }
+}
+
+static void STDMETHODCALLTYPE Hook_RSSetViewports(ID3D11DeviceContext *ctx, UINT numViewports,
+                                                    const D3D11_VIEWPORT *viewports) {
+    RSSetViewports_t orig;
+
+    if (seq_active()) {
+        if (numViewports > 0 && viewports != NULL) {
+            seq_line(ctx, 0, "RSSETVP num=%u vp0=%dx%d@%d,%d", numViewports,
+                      (int)viewports[0].Width, (int)viewports[0].Height,
+                      (int)viewports[0].TopLeftX, (int)viewports[0].TopLeftY);
+        } else {
+            seq_line(ctx, 0, "RSSETVP num=%u vp0=?", numViewports);
+        }
+    }
+
+    EnterCriticalSection(&g_seq_cs);
+    orig = (RSSetViewports_t)find_hooked_orig_locked((*(void ***)ctx)[VTBL_CTX_RSSETVIEWPORTS]);
+    LeaveCriticalSection(&g_seq_cs);
+
+    if (orig != NULL) {
+        orig(ctx, numViewports, viewports);
+    } else {
+        log_msg("seqdump: BUG - no RSSetViewports original for ctx=%p vtbl=%p; call dropped",
+                 (void *)ctx, *(void ***)ctx);
+    }
+}
+
+static void STDMETHODCALLTYPE Hook_OMSetRenderTargets(ID3D11DeviceContext *ctx, UINT numViews,
+                                                        ID3D11RenderTargetView *const *rtvs,
+                                                        ID3D11DepthStencilView *dsv) {
+    OMSetRenderTargets_t orig;
+
+    if (seq_active()) {
+        ID3D11RenderTargetView *rtv0 = (numViews > 0 && rtvs != NULL) ? rtvs[0] : NULL;
+        ID3D11Resource *rtres = NULL;
+        ID3D11Resource *dsres = NULL;
+        char rt0buf[32];
+        char dsbuf[32];
+
+        if (rtv0 != NULL) {
+            ID3D11RenderTargetView_GetResource(rtv0, &rtres);
+        }
+        describe_texture2d(rtres, rt0buf, sizeof(rt0buf));
+        if (rtres != NULL) {
+            ID3D11Resource_Release(rtres);
+        }
+
+        if (dsv != NULL) {
+            ID3D11DepthStencilView_GetResource(dsv, &dsres);
+        }
+        describe_texture2d(dsres, dsbuf, sizeof(dsbuf));
+        if (dsres != NULL) {
+            ID3D11Resource_Release(dsres);
+        }
+
+        seq_line(ctx, 0, "OMSETRT nrt=%u rtv0=0x%llX dsv=0x%llX rt0=%s ds=%s", numViews,
+                  (unsigned long long)(uintptr_t)rtv0, (unsigned long long)(uintptr_t)dsv, rt0buf, dsbuf);
+    }
+
+    EnterCriticalSection(&g_seq_cs);
+    orig = (OMSetRenderTargets_t)find_hooked_orig_locked((*(void ***)ctx)[VTBL_CTX_OMSETRENDERTARGETS]);
+    LeaveCriticalSection(&g_seq_cs);
+
+    if (orig != NULL) {
+        orig(ctx, numViews, rtvs, dsv);
+    } else {
+        log_msg("seqdump: BUG - no OMSetRenderTargets original for ctx=%p vtbl=%p; call dropped",
+                 (void *)ctx, *(void ***)ctx);
+    }
 }
 
 static void STDMETHODCALLTYPE Hook_DrawIndexed(ID3D11DeviceContext *ctx, UINT idxCount, UINT startIdx,
                                                 INT baseVtx) {
+    seq_maybe_late_hook_deferred_ctx(ctx);
     if (seq_active()) {
         seq_line(ctx, 0, "DRAW variant=DrawIndexed count=%u", idxCount);
     }
@@ -391,6 +843,7 @@ static void STDMETHODCALLTYPE Hook_DrawIndexed(ID3D11DeviceContext *ctx, UINT id
 }
 
 static void STDMETHODCALLTYPE Hook_Draw(ID3D11DeviceContext *ctx, UINT vtxCount, UINT startVtx) {
+    seq_maybe_late_hook_deferred_ctx(ctx);
     if (seq_active()) {
         seq_line(ctx, 0, "DRAW variant=Draw count=%u", vtxCount);
     }
@@ -400,6 +853,7 @@ static void STDMETHODCALLTYPE Hook_Draw(ID3D11DeviceContext *ctx, UINT vtxCount,
 static void STDMETHODCALLTYPE Hook_DrawIndexedInst(ID3D11DeviceContext *ctx, UINT idxPerInst,
                                                     UINT instCount, UINT startIdx, INT baseVtx,
                                                     UINT startInst) {
+    seq_maybe_late_hook_deferred_ctx(ctx);
     if (seq_active()) {
         seq_line(ctx, 0, "DRAW variant=DrawIndexedInstanced count=%u instances=%u", idxPerInst, instCount);
     }
@@ -408,6 +862,7 @@ static void STDMETHODCALLTYPE Hook_DrawIndexedInst(ID3D11DeviceContext *ctx, UIN
 
 static void STDMETHODCALLTYPE Hook_DrawInst(ID3D11DeviceContext *ctx, UINT vtxPerInst, UINT instCount,
                                              UINT startVtx, UINT startInst) {
+    seq_maybe_late_hook_deferred_ctx(ctx);
     if (seq_active()) {
         seq_line(ctx, 0, "DRAW variant=DrawInstanced count=%u instances=%u", vtxPerInst, instCount);
     }
@@ -447,11 +902,17 @@ static void STDMETHODCALLTYPE Hook_VSSetCB1(ID3D11DeviceContext1 *ctx, UINT star
  * ExecuteCommandList on the immediate context. These two hooks (plus the
  * ctx= field now on every event line) let a later analysis pass confirm
  * or refute that directly from seqdump.log, without guessing from thread
- * ids alone. */
+ * ids alone. Addendum 3 additionally uses this hook (and the Draw* hooks
+ * above) as the discovery point for late-hooking deferred-context
+ * vtables - see seq_maybe_late_hook_deferred_ctx(). */
 static HRESULT STDMETHODCALLTYPE Hook_FinishCommandList(ID3D11DeviceContext *ctx,
                                                           WINBOOL restoreDeferredContextState,
                                                           ID3D11CommandList **ppCommandList) {
-    HRESULT hr = g_finishcmdlist_orig(ctx, restoreDeferredContextState, ppCommandList);
+    HRESULT hr;
+
+    seq_maybe_late_hook_deferred_ctx(ctx);
+
+    hr = g_finishcmdlist_orig(ctx, restoreDeferredContextState, ppCommandList);
     if (seq_active()) {
         ID3D11CommandList *cl = (ppCommandList != NULL) ? *ppCommandList : NULL;
         seq_line(ctx, 0, "FINISHCMDLIST restore=%d hr=0x%08lX cmdlist=0x%llX",
@@ -461,9 +922,23 @@ static HRESULT STDMETHODCALLTYPE Hook_FinishCommandList(ID3D11DeviceContext *ctx
     return hr;
 }
 
+/* Task 5 addendum 3: TEWVR_SKIPCL live visual probe. While
+ * %LOCALAPPDATA%\TEWVR\skipcl.txt exists, this hook does NOT call through
+ * to the real ExecuteCommandList - the recorded command list (typically a
+ * chunk of world geometry, per the controller's gameplay analysis) is
+ * simply dropped every frame, letting a human watching the game toggle
+ * whole render passes on/off live by creating/deleting one file. */
 static void STDMETHODCALLTYPE Hook_ExecuteCommandList(ID3D11DeviceContext *ctx,
                                                         ID3D11CommandList *commandList,
                                                         WINBOOL restoreContextState) {
+    if (seq_skipcl_should_skip()) {
+        if (seq_active()) {
+            seq_line(ctx, 0, "EXECUTECMDLIST SKIPPED cmdlist=0x%llX restore=%d",
+                      (unsigned long long)(uintptr_t)commandList, (int)restoreContextState);
+        }
+        return; /* do NOT call through - this IS the skip */
+    }
+
     if (seq_active()) {
         seq_line(ctx, 0, "EXECUTECMDLIST cmdlist=0x%llX restore=%d",
                   (unsigned long long)(uintptr_t)commandList, (int)restoreContextState);
@@ -591,7 +1066,7 @@ void seqdump_install(ID3D11DeviceContext *dummy_ctx) {
     DWORD len;
     void **vtbl;
     int ok_map, ok_unmap, ok_update, ok_vscb, ok_vsset, ok_di, ok_d, ok_dii, ok_dinst;
-    int ok_finishcl, ok_executecl;
+    int ok_finishcl, ok_executecl, ok_rsvp, ok_omrt;
     int ok_vscb1 = 0;
 
     if (g_seq_installed) {
@@ -629,19 +1104,48 @@ void seqdump_install(ID3D11DeviceContext *dummy_ctx) {
     }
 
     vtbl = *(void ***)dummy_ctx;
+    g_immediate_vtbl = (void *)vtbl;
 
-    ok_map = mh_glue_create_and_enable(vtbl[VTBL_CTX_MAP], (void *)&Hook_Map, (void **)&g_map_orig,
-                                        "seqdump ID3D11DeviceContext::Map");
-    ok_unmap = mh_glue_create_and_enable(vtbl[VTBL_CTX_UNMAP], (void *)&Hook_Unmap, (void **)&g_unmap_orig,
-                                          "seqdump ID3D11DeviceContext::Unmap");
+    /* VSSetShader/VSSetConstantBuffers/Map/Unmap/RSSetViewports/
+     * OMSetRenderTargets (Task 5 addendum 3): hooked here on the
+     * IMMEDIATE vtable via the same address-keyed hook_or_reuse_locked_
+     * guard() seq_maybe_late_hook_deferred_ctx() uses for any deferred
+     * vtable it discovers later - each of the six detours looks up its
+     * original by the address at the CALLING ctx's own vtable slot (see
+     * g_hooked_funcs's doc comment for why address-keyed, not vtable-
+     * pointer-keyed, dispatch is required here). */
+    {
+        VSSetShader_t vsset_o = NULL;
+        VSSetCB_t vscb_o = NULL;
+        Map_t map_o = NULL;
+        Unmap_t unmap_o = NULL;
+        RSSetViewports_t rsvp_o = NULL;
+        OMSetRenderTargets_t omrt_o = NULL;
+
+        ok_map = hook_or_reuse_locked_guard(vtbl[VTBL_CTX_MAP], (void *)&Hook_Map, (void **)&map_o,
+                                             "seqdump ID3D11DeviceContext::Map");
+        ok_unmap = hook_or_reuse_locked_guard(vtbl[VTBL_CTX_UNMAP], (void *)&Hook_Unmap, (void **)&unmap_o,
+                                               "seqdump ID3D11DeviceContext::Unmap");
+        ok_vscb = hook_or_reuse_locked_guard(vtbl[VTBL_CTX_VSSETCONSTANTBUFFERS], (void *)&Hook_VSSetCB,
+                                              (void **)&vscb_o,
+                                              "seqdump ID3D11DeviceContext::VSSetConstantBuffers");
+        ok_vsset = hook_or_reuse_locked_guard(vtbl[VTBL_CTX_VSSETSHADER], (void *)&Hook_VSSetShader,
+                                               (void **)&vsset_o, "seqdump ID3D11DeviceContext::VSSetShader");
+        ok_rsvp = hook_or_reuse_locked_guard(vtbl[VTBL_CTX_RSSETVIEWPORTS], (void *)&Hook_RSSetViewports,
+                                              (void **)&rsvp_o, "seqdump ID3D11DeviceContext::RSSetViewports");
+        ok_omrt = hook_or_reuse_locked_guard(vtbl[VTBL_CTX_OMSETRENDERTARGETS], (void *)&Hook_OMSetRenderTargets,
+                                              (void **)&omrt_o, "seqdump ID3D11DeviceContext::OMSetRenderTargets");
+        (void)vsset_o;
+        (void)vscb_o;
+        (void)map_o;
+        (void)unmap_o;
+        (void)rsvp_o;
+        (void)omrt_o;
+    }
+
     ok_update = mh_glue_create_and_enable(vtbl[VTBL_CTX_UPDATESUBRESOURCE], (void *)&Hook_UpdateSubresource,
                                            (void **)&g_update_orig,
                                            "seqdump ID3D11DeviceContext::UpdateSubresource");
-    ok_vscb = mh_glue_create_and_enable(vtbl[VTBL_CTX_VSSETCONSTANTBUFFERS], (void *)&Hook_VSSetCB,
-                                         (void **)&g_vsset_cb_orig,
-                                         "seqdump ID3D11DeviceContext::VSSetConstantBuffers");
-    ok_vsset = mh_glue_create_and_enable(vtbl[VTBL_CTX_VSSETSHADER], (void *)&Hook_VSSetShader,
-                                          (void **)&g_vsset_orig, "seqdump ID3D11DeviceContext::VSSetShader");
     ok_di = mh_glue_create_and_enable(vtbl[VTBL_CTX_DRAWINDEXED], (void *)&Hook_DrawIndexed,
                                        (void **)&g_drawindexed_orig, "seqdump ID3D11DeviceContext::DrawIndexed");
     ok_d = mh_glue_create_and_enable(vtbl[VTBL_CTX_DRAW], (void *)&Hook_Draw, (void **)&g_draw_orig,
@@ -685,22 +1189,24 @@ void seqdump_install(ID3D11DeviceContext *dummy_ctx) {
     }
 
     g_seq_hooks_ok = ok_map || ok_unmap || ok_update || ok_vscb || ok_vsset ||
-                     ok_di || ok_d || ok_dii || ok_dinst || ok_finishcl || ok_executecl;
+                     ok_di || ok_d || ok_dii || ok_dinst || ok_finishcl || ok_executecl ||
+                     ok_rsvp || ok_omrt;
 
     log_msg("seqdump: hooks map=%d unmap=%d update=%d vscb=%d vsset=%d di=%d d=%d dii=%d dinst=%d "
-             "vscb1=%d finishcl=%d executecl=%d -> %s (arm=%s, caps at %d events)",
+             "vscb1=%d finishcl=%d executecl=%d rsvp=%d omrt=%d -> %s (arm=%s, caps at %d events)",
              ok_map, ok_unmap, ok_update, ok_vscb, ok_vsset, ok_di, ok_d, ok_dii, ok_dinst, ok_vscb1,
-             ok_finishcl, ok_executecl,
+             ok_finishcl, ok_executecl, ok_rsvp, ok_omrt,
              g_seq_hooks_ok ? "ACTIVE" : "inactive",
              g_seq_armfile_mode ? "seqarm.txt file-trigger" : "frame-301 auto",
              SEQDUMP_MAX_EVENTS);
 
     if (g_seq_hooks_ok && g_seq_fp != NULL) {
         fprintf(g_seq_fp, "TEWVR seqdump session start (TEWVR_SEQDUMP=1%s); hooks: map=%d unmap=%d "
-                 "update=%d vscb=%d vsset=%d di=%d d=%d dii=%d dinst=%d vscb1=%d finishcl=%d executecl=%d\n",
+                 "update=%d vscb=%d vsset=%d di=%d d=%d dii=%d dinst=%d vscb1=%d finishcl=%d executecl=%d "
+                 "rsvp=%d omrt=%d\n",
                  g_seq_armfile_mode ? ", TEWVR_SEQDUMP_ARMFILE=1 (arm via seqarm.txt)" : "",
                  ok_map, ok_unmap, ok_update, ok_vscb, ok_vsset, ok_di, ok_d, ok_dii, ok_dinst, ok_vscb1,
-                 ok_finishcl, ok_executecl);
+                 ok_finishcl, ok_executecl, ok_rsvp, ok_omrt);
         fflush(g_seq_fp);
     }
 }
@@ -740,5 +1246,23 @@ void seqdump_clear_stale_armfile(void) {
         }
     } else {
         log_msg("seqdump: deleted stale seqarm.txt left over from a previous session");
+    }
+}
+
+void seqdump_clear_stale_skipcl(void) {
+    wchar_t path[MAX_PATH];
+
+    skipcl_path(path, MAX_PATH);
+    if (path[0] == L'\0') {
+        return;
+    }
+
+    if (!DeleteFileW(path)) {
+        DWORD err = GetLastError();
+        if (err != ERROR_FILE_NOT_FOUND && err != ERROR_PATH_NOT_FOUND) {
+            log_msg("seqdump: failed to delete stale skipcl.txt (gle=%lu)", (unsigned long)err);
+        }
+    } else {
+        log_msg("seqdump: deleted stale skipcl.txt left over from a previous session");
     }
 }
