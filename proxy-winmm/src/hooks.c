@@ -32,14 +32,6 @@ static HRESULT STDMETHODCALLTYPE Hook_Present(IDXGISwapChain *sc, UINT sync, UIN
      * first Present" logic and emits the PRESENT frame-boundary marker. */
     seqdump_on_present(g_frame);
 
-    /* Task 6: refreshes mvp_patch's per-frame cb0 content snapshot (its
-     * chosen Step 0 read mechanism) on the immediate context. Cheap no-op
-     * until mvp_patch_install() has succeeded and the real device is
-     * captured (see mvp_patch.c). Always active (not gated behind a
-     * TEWVR_* diagnostic flag) - this is the real mod mechanism, not
-     * instrumentation. */
-    mvp_patch_on_present();
-
     return g_present_orig(sc, sync, flags);
 }
 
@@ -99,18 +91,21 @@ cleanup:
          * CreateVertexShader hook under TEWVR_SEQDUMP=1 - see
          * shaderdump.h); same throwaway-vtable contract. */
         shaderdump_install(dev, ctx);
+
+        /* Task 6: the real per-draw MVP override (NOT a TEWVR_* diagnostic
+         * mode - always installed). Same throwaway-vtable contract: reads
+         * ID3D11Device::CreateBuffer's and ID3D11DeviceContext::
+         * DrawIndexed/Draw's vtable slots off these dummy objects, retains
+         * nothing from either. Needs `dev` too (unlike cbdump/shaderdump/
+         * seqdump above) because its Step 0 read mechanism hooks
+         * CreateBuffer on the device vtable - see mvp_patch.h. */
+        mvp_patch_install(dev, ctx);
     }
     if (ctx) {
         /* Task 5 TEWVR_SEQDUMP=1 ordered event-stream instrumentation;
          * same throwaway-vtable contract as cbdump/shaderdump above. See
          * seqdump.h. */
         seqdump_install(ctx);
-
-        /* Task 6: the real per-draw MVP override (NOT a TEWVR_* diagnostic
-         * mode - always installed). Same throwaway-vtable contract: reads
-         * DrawIndexed/Draw's vtable slots off this dummy context, retains
-         * nothing from it. See mvp_patch.h. */
-        mvp_patch_install(ctx);
     }
     if (sc)  IDXGISwapChain_Release(sc);
     if (ctx) ID3D11DeviceContext_Release(ctx);
