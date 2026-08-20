@@ -28,6 +28,11 @@ struct MvpEntry {
     uint64_t hash;
     UINT cb0_size;
     int mvpx_offset; /* -1 == not found for this shader */
+    int contiguous;  /* Task 6: 1 iff mvpmatrixy/z/w were confirmed to sit at
+                         mvpx_offset+16/+32/+48 (see mvptable_on_shader_created()'s
+                         own contiguity check, previously computed and logged but
+                         discarded - now kept so mvp_row_offsets_for_shader() can
+                         refuse to hand out y/z/w offsets it isn't sure of). */
 };
 static struct MvpEntry g_mvp[MVP_TABLE_SIZE];
 static int g_mvp_count = 0;
@@ -94,7 +99,7 @@ static struct MvpEntry *mvp_find_or_add_locked(uint64_t hash) {
  * skip writing another mvp_offsets.log line for it. Returns 0 and inserts
  * the entry otherwise - the caller (still holding the lock) is then, and
  * only then, responsible for the log line. */
-static int mvp_record_locked(uint64_t hash, UINT cb0_size, int mvpx_offset) {
+static int mvp_record_locked(uint64_t hash, UINT cb0_size, int mvpx_offset, int contiguous) {
     struct MvpEntry *e = mvp_find_locked(hash);
     if (e != NULL) {
         return 1;
@@ -103,6 +108,7 @@ static int mvp_record_locked(uint64_t hash, UINT cb0_size, int mvpx_offset) {
     if (e != NULL) {
         e->cb0_size = cb0_size;
         e->mvpx_offset = mvpx_offset;
+        e->contiguous = contiguous;
     }
     return 0;
 }
@@ -300,7 +306,7 @@ void mvptable_on_shader_created(uint64_t hash, const void *bytecode, SIZE_T leng
      * won that race; only the winner writes the log line, so
      * mvp_offsets.log can never get two lines for the same hash. */
     EnterCriticalSection(&g_mvp_cs);
-    already = mvp_record_locked(hash, (UINT)cb0_size, mvpx);
+    already = mvp_record_locked(hash, (UINT)cb0_size, mvpx, contiguous);
     if (!already && g_mvp_fp != NULL) {
         fprintf(g_mvp_fp, "hash=%016llX cb0=%d mvpx=%d contiguous=%d\n",
                  (unsigned long long)hash, cb0_size, mvpx, contiguous);
@@ -331,4 +337,46 @@ int mvp_offset_for_shader(const void *vs_ptr) {
     LeaveCriticalSection(&g_mvp_cs);
 
     return result;
+}
+
+/* Task 6: the CB0-content patch mechanism (mvp_patch.c) needs the byte
+ * offset of ALL FOUR mvpmatrix{x,y,z,w} rows, not just x - and, per the
+ * mvp_offsets.log WARNINGs observed during Task 6 discovery gameplay
+ * capture, y/z/w are NOT always contiguous at mvpx_offset+16/+32/+48 (some
+ * shaders reflect them elsewhere, e.g. +64/+96/+144). mvp_offset_for_shader()
+ * alone cannot tell a caller which case it is looking at, so patching would
+ * silently corrupt (not crash) draws using a non-contiguous shader. This
+ * function refuses to hand out row offsets at all unless the contiguous
+ * layout was confirmed at reflection time, so mvp_patch.c can fall through
+ * to "skip, draw unpatched" - the same fail-safe posture as an unknown
+ * shader - for the shaders it can't safely reach yet, rather than guessing.
+ * Returns 1 and fills row_offsets[0..3] = {mvpx, mvpx+16, mvpx+32, mvpx+48}
+ * only when the shader is known, has a reflected mvpx_offset, AND was
+ * confirmed contiguous; returns 0 (row_offsets untouched) otherwise. */
+int mvp_row_offsets_for_shader(const void *vs_ptr, int row_offsets[4]) {
+    uint64_t hash;
+    struct MvpEntry *e;
+    int ok = 0;
+
+    if (!g_mvp_cs_ready || vs_ptr == NULL || row_offsets == NULL) {
+        return 0;
+    }
+
+    hash = shaderdump_hash_for_shader(vs_ptr);
+    if (hash == 0) {
+        return 0;
+    }
+
+    EnterCriticalSection(&g_mvp_cs);
+    e = mvp_find_locked(hash);
+    if (e != NULL && e->mvpx_offset >= 0 && e->contiguous) {
+        row_offsets[0] = e->mvpx_offset;
+        row_offsets[1] = e->mvpx_offset + 16;
+        row_offsets[2] = e->mvpx_offset + 32;
+        row_offsets[3] = e->mvpx_offset + 48;
+        ok = 1;
+    }
+    LeaveCriticalSection(&g_mvp_cs);
+
+    return ok;
 }

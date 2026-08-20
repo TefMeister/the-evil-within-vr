@@ -66,3 +66,16 @@ void mvptable_on_shader_created(uint64_t hash, const void *bytecode, SIZE_T leng
  * after the corresponding CreateVertexShader call has returned (creations
  * happen early, per the brief). */
 int mvp_offset_for_shader(const void *vs_ptr);
+
+/* Task 6: like mvp_offset_for_shader(), but hands out ALL FOUR mvpmatrix
+ * row offsets at once, and ONLY when they are known to be safely readable
+ * as 4 contiguous 16-byte rows (mvpx_offset, +16, +32, +48) - refusing
+ * (returning 0) for shaders whose y/z/w rows were reflected at some other,
+ * non-contiguous layout, rather than guessing wrong offsets. This is the
+ * function mvp_patch.c's real per-draw MVP override actually calls -
+ * mvp_offset_for_shader() alone is not enough to patch all 4 rows safely.
+ * Returns 1 and fills row_offsets[0..3] on success; returns 0 (leaving
+ * row_offsets untouched) if the shader is untracked, has no reflected
+ * mvpx_offset, or was not confirmed contiguous. See mvptable.c's own
+ * comment above this function for the discovery finding that motivated it. */
+int mvp_row_offsets_for_shader(const void *vs_ptr, int row_offsets[4]);
