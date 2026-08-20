@@ -27,9 +27,41 @@
  *   ID3D11DeviceContext::FinishCommandList/ExecuteCommandList (review
  *     addendum 2 - see below) - to detect deferred-context command-list
  *     recording/submission.
+ *   ID3D11DeviceContext::RSSetViewports/OMSetRenderTargets (addendum 3 -
+ *     see below) - low-frequency state events, hooked on both the
+ *     immediate vtable and any deferred vtable addendum 3 discovers.
  *   ID3D11DeviceContext1::VSSetConstantBuffers1 (if the dummy context QIs
  *     to ID3D11DeviceContext1 at install time) - detects/records whether
  *     the engine binds cb ranges with D3D11.1-style offsets.
+ *
+ * Addendum 3 (post-review, gameplay capture): the gameplay capture proved
+ * the world-geometry bulk is recorded on DEFERRED contexts, whose
+ * VSSetShader/VSSetConstantBuffers/Map/Unmap/RSSetViewports/
+ * OMSetRenderTargets calls our immediate-vtable-only hooks above could
+ * not see - deferred contexts use a genuinely different vtable than the
+ * immediate context for those six methods specifically (DrawIndexed/
+ * Draw/DrawIndexedInstanced/DrawInstanced/FinishCommandList/
+ * ExecuteCommandList happen to share one implementation address across
+ * both flavors, which is why those hooks already saw deferred-context
+ * calls even before this addendum). Three additions:
+ *   1. Late-hooking: Hook_DrawIndexed/Draw/DrawIndexedInst/DrawInst and
+ *      Hook_FinishCommandList now call seq_maybe_late_hook_deferred_ctx()
+ *      on the `ctx` they were invoked with; the first time an unseen ctx
+ *      pointer's vtable differs from the immediate context's, this
+ *      MinHook-installs fresh hooks on THAT vtable's VSSetShader/
+ *      VSSetConstantBuffers/Map/Unmap/RSSetViewports/OMSetRenderTargets
+ *      slots, reusing the exact same detour functions (they already log
+ *      the ctx they were called with, so events self-identify).
+ *   2. RSSETVP/OMSETRT events (see above) - hooked on both the immediate
+ *      and any late-hooked deferred vtable.
+ *   3. TEWVR_SKIPCL live visual toggle: while
+ *      %LOCALAPPDATA%\TEWVR\skipcl.txt exists, Hook_ExecuteCommandList
+ *      drops the command list instead of executing it (logging
+ *      "EXECUTECMDLIST SKIPPED" while capture is active) - a live
+ *      render-pass on/off switch for a human watching the game, working
+ *      whenever TEWVR_SEQDUMP=1 regardless of capture/arm state.
+ *      seqdump_clear_stale_skipcl() deletes any leftover skipcl.txt at
+ *      DLL startup, same as seqarm.txt.
  *
  * One line per event to %LOCALAPPDATA%\TEWVR\seqdump.log, with a
  * monotonically increasing sequence number, thread id, AND the
@@ -108,3 +140,11 @@ void seqdump_on_present(UINT64 frame_number);
  * absent, or %LOCALAPPDATA%\TEWVR doesn't exist yet) is silent; only an
  * unexpected deletion failure logs once. Never crashes. */
 void seqdump_clear_stale_armfile(void);
+
+/* Deletes any stale %LOCALAPPDATA%\TEWVR\skipcl.txt left over from a
+ * previous session's TEWVR_SKIPCL live-toggle use (addendum 3), so a
+ * leftover file can't silently start dropping command lists the instant
+ * a later run's ExecuteCommandList hook installs. Same call-site and
+ * fail-safe contract as seqdump_clear_stale_armfile() - call once,
+ * unconditionally, at DLL startup. */
+void seqdump_clear_stale_skipcl(void);
