@@ -8,6 +8,7 @@
 #include "cbdump.h"
 #include "shaderdump.h"
 #include "seqdump.h"
+#include "mvp_patch.h"
 
 Present_t g_present_orig = NULL;
 
@@ -30,6 +31,14 @@ static HRESULT STDMETHODCALLTYPE Hook_Present(IDXGISwapChain *sc, UINT sync, UIN
      * hooks installed successfully. Drives the "arm 300 frames after the
      * first Present" logic and emits the PRESENT frame-boundary marker. */
     seqdump_on_present(g_frame);
+
+    /* Task 6: refreshes mvp_patch's per-frame cb0 content snapshot (its
+     * chosen Step 0 read mechanism) on the immediate context. Cheap no-op
+     * until mvp_patch_install() has succeeded and the real device is
+     * captured (see mvp_patch.c). Always active (not gated behind a
+     * TEWVR_* diagnostic flag) - this is the real mod mechanism, not
+     * instrumentation. */
+    mvp_patch_on_present();
 
     return g_present_orig(sc, sync, flags);
 }
@@ -96,6 +105,12 @@ cleanup:
          * same throwaway-vtable contract as cbdump/shaderdump above. See
          * seqdump.h. */
         seqdump_install(ctx);
+
+        /* Task 6: the real per-draw MVP override (NOT a TEWVR_* diagnostic
+         * mode - always installed). Same throwaway-vtable contract: reads
+         * DrawIndexed/Draw's vtable slots off this dummy context, retains
+         * nothing from it. See mvp_patch.h. */
+        mvp_patch_install(ctx);
     }
     if (sc)  IDXGISwapChain_Release(sc);
     if (ctx) ID3D11DeviceContext_Release(ctx);
@@ -147,5 +162,6 @@ void hooks_remove(void) {
     cbdump_remove();
     shaderdump_remove();
     seqdump_remove();
+    mvp_patch_remove();
     g_hooks_active = 0;
 }

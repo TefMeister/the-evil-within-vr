@@ -44,10 +44,12 @@ static DrawInst_t g_drawinst_orig = NULL;
 
 static int g_sd_installed = 0;
 static int g_sd_active = 0;       /* full TEWVR_SHADERDUMP stats/blob-dump mode */
-static int g_cvs_hook_active = 0; /* CreateVertexShader hook installed at all (Task 5:
-                                      TEWVR_SHADERDUMP=1 OR TEWVR_SEQDUMP=1) - gates hash
-                                      tracking + mvptable's mvp-offset reflection, a
-                                      strict superset of g_sd_active */
+static int g_cvs_hook_active = 0; /* CreateVertexShader hook installed at all - gates hash
+                                      tracking + mvptable's mvp-offset reflection. Task 6:
+                                      ALWAYS on now (mvp_patch.c needs it every normal run,
+                                      not just a TEWVR_SHADERDUMP/SEQDUMP diagnostic
+                                      session) - a strict superset of g_sd_active, which
+                                      stays opt-in for the stats/blob-dump-only hooks. */
 
 /* Guards every table below. Creates happen on loading threads while draws
  * happen on the render thread, so unlike cbdump this lock genuinely earns
@@ -398,22 +400,33 @@ void shaderdump_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx)
     len = GetEnvironmentVariableA("TEWVR_SEQDUMP", flag, sizeof(flag));
     seqdump_on = (len > 0 && len < sizeof(flag) && strcmp(flag, "1") == 0);
 
-    if (!shaderdump_on && !seqdump_on) {
-        return; /* off by default: touch nothing */
-    }
+    /* Task 6: the old "!shaderdump_on && !seqdump_on -> return, touch
+     * nothing" gate is REMOVED here. mvp_patch.c's real per-draw MVP
+     * override (not a diagnostic mode) depends on the CreateVertexShader
+     * hook below + mvptable's reflection table being populated on every
+     * normal run - previously this whole file (including that hook) was
+     * diagnostic-only and did nothing unless TEWVR_SHADERDUMP=1 or
+     * TEWVR_SEQDUMP=1 was set, which would have left mvp_patch.c silently
+     * inert (mvp_offset_for_shader() always "unknown") during ordinary
+     * play. Only the blob-dump directory + the VSSetShader/Draw* stats
+     * hooks further down stay opt-in behind shaderdump_on (their original,
+     * still-diagnostic-only purpose). */
 
     if (dummy_dev == NULL || dummy_ctx == NULL) {
-        log_msg("shaderdump: shader hooks requested but dummy device/context is NULL; skipping");
+        log_msg("shaderdump: dummy device/context is NULL; shader-hash/mvp-offset "
+                 "tracking (needed by mvp_patch.c) unavailable this session");
         return;
     }
 
-    g_shader_dir_ok = shaderdump_prepare_dir();
-    if (!g_shader_dir_ok) {
-        log_msg("shaderdump: could not create shaders dir; blob dumping disabled (stats still on)");
+    if (shaderdump_on) {
+        g_shader_dir_ok = shaderdump_prepare_dir();
+        if (!g_shader_dir_ok) {
+            log_msg("shaderdump: could not create shaders dir; blob dumping disabled (stats still on)");
+        }
     }
 
     if (!mh_glue_init()) {
-        log_msg("shaderdump: MinHook init failed; skipping shader hooks");
+        log_msg("shaderdump: MinHook init failed; shader-hash/mvp-offset tracking unavailable this session");
         return;
     }
 
@@ -424,9 +437,10 @@ void shaderdump_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx)
     ctx_vtbl = *(void ***)dummy_ctx;
 
     /* CreateVertexShader: needed for shader-ptr->hash tracking (seqdump's
-     * VSSETSHADER event) and the Task 5 mvp-offset reflection table
-     * (mvptable.c) whenever EITHER mode is on - not just full
-     * TEWVR_SHADERDUMP stats/blob-dump mode. */
+     * VSSETSHADER event, when active) and the mvp-offset reflection table
+     * (mvptable.c) that mvp_patch.c's real per-draw override consumes -
+     * ALWAYS installed now (Task 6), independent of shaderdump_on/
+     * seqdump_on. */
     ok_create = mh_glue_create_and_enable(dev_vtbl[VTBL_DEV_CREATEVERTEXSHADER],
                                            (void *)&Hook_CreateVS, (void **)&g_createvs_orig,
                                            "ID3D11Device::CreateVertexShader");
