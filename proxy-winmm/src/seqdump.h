@@ -91,6 +91,26 @@
  * can't prematurely arm a later one. Default behaviour (ARMFILE unset)
  * is unchanged.
  *
+ * Task 6 (discovery brief, "1920B buffer" puzzle): the addendum-3 late-hook
+ * discovery point (seq_maybe_late_hook_deferred_ctx()) was only ever
+ * reached from the Draw/FinishCommandList hooks, so a dedicated
+ * fill/streaming deferred context that only ever calls Map/Unmap/
+ * VSSetConstantBuffers (never Draws) stayed invisible. Feature 1: Hook_Map/
+ * Hook_Unmap/Hook_VSSetCB now call seq_maybe_late_hook_deferred_ctx() too,
+ * and the UNMAP content fingerprint is extended from 4 to up to 8 floats,
+ * to help correlate fills to bound slot0/2/3 pointers by content. Feature 2
+ * (TEWVR_CBPEEK=1, its own separate cheap-off gate on top of
+ * TEWVR_SEQDUMP=1): for the first 300 deferred DrawIndexed calls after
+ * capture arms, reads the ACTUAL bound content of VS slots 0/2/3 at draw
+ * time - via a CopySubresourceRegion + Map(READ) into one lazily-created
+ * 2048-byte D3D11_USAGE_STAGING buffer on the IMMEDIATE context - and logs
+ * a CBPEEK line (slot, resource ptr, size, FNV-1a64 content hash, and the 4
+ * floats at the reflected mvpmatrixx offset for the currently-bound VS).
+ * This crosses threads (deferred-context worker thread driving the
+ * immediate context); see seqdump.c's CBPEEK state-block comment for the
+ * residual cross-thread hazard this cannot fully close, and why it's
+ * opt-in and capped.
+ *
  * Entirely inert unless TEWVR_SEQDUMP=1 when seqdump_install() runs -
  * off by default, so normal play (and every other TEWVR_* mode) is
  * unaffected. Fail-safe throughout: any failure (log open, MinHook init,

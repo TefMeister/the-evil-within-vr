@@ -13,6 +13,7 @@
 #include "log.h"
 #include "d3d_capture.h"
 #include "shaderdump.h"
+#include "mvptable.h"
 
 /* ---- vtable indices (same verified counting scheme as cbdump.c/shaderdump.c) ---- */
 #define VTBL_CTX_VSSETCONSTANTBUFFERS 7
@@ -213,6 +214,52 @@ static struct MapLatch g_latch[SEQ_LATCH_SIZE];
 /* Live SKIPCL visual toggle (Task 5 addendum 3) - see Hook_ExecuteCommandList. */
 static int g_skipcl_call_count = 0;
 static int g_skipcl_active = 0;
+
+/* ---- CBPEEK: draw-time constant-buffer content read (Task 6 discovery
+ * brief, Feature 2 - FALLBACK, gated behind TEWVR_CBPEEK=1, OFF unless
+ * set) ----
+ * Purpose: if a fill/streaming context's Map/Unmap events (Feature 1)
+ * still don't explain the mystery 1920-byte VS-slot0 buffer's per-object
+ * variation, read the buffer's actual bound CONTENT at draw time instead -
+ * see it as the GPU would, regardless of when/how it was last written.
+ * Reuses g_seq_cs for the small per-ctx slot/VS latch tables below (same
+ * "a lock costs nothing here" reasoning as every other tiny table in this
+ * file); g_cbpeek_cs is a SEPARATE, dedicated critical section that only
+ * ever guards the staging-buffer create/CopySubresourceRegion/Map/Unmap
+ * sequence itself, because that sequence runs the IMMEDIATE context
+ * (g_d3d.ctx) from a DEFERRED context's own worker thread - a genuine
+ * cross-thread hazard the brief calls out explicitly. Our own critical
+ * section only serializes OUR OWN accesses to g_d3d.ctx against each
+ * other; it cannot and does not serialize against the game's own render
+ * thread also using g_d3d.ctx concurrently and uncoordinated with us -
+ * that residual hazard is inherent to this diagnostic, which is exactly
+ * why it is opt-in (TEWVR_CBPEEK=1) and capped at SEQ_CBPEEK_MAX_DRAWS
+ * draws total, per the brief. */
+#define SEQ_CBPEEK_MAX_DRAWS      300
+#define SEQ_CBPEEK_STAGING_BYTES  2048
+static int g_cbpeek_enabled = 0;
+static CRITICAL_SECTION g_cbpeek_cs;
+static int g_cbpeek_cs_ready = 0;
+static ID3D11Buffer *g_cbpeek_staging = NULL;
+static int g_cbpeek_staging_failed = 0; /* sticky: staging creation already failed once, logged, don't retry */
+static volatile LONG g_cbpeek_draw_count = 0;
+static volatile LONG g_cbpeek_fail_log_count = 0; /* rate-limits Copy/Map failure logs */
+
+/* Per-deferred-context latch of "what's currently bound at VS slots 0/2/3
+ * and which VS is bound", updated (only while CBPEEK is enabled) from
+ * Hook_VSSetCB/Hook_VSSetShader so Hook_DrawIndexed knows, at draw time,
+ * what to peek at without re-deriving state itself. Same overwrite-when-
+ * full policy as g_latch above (small, best-effort, never a hot path when
+ * TEWVR_CBPEEK is unset since these updates are skipped entirely then). */
+#define SEQ_CBPEEK_CTX_MAX 16
+struct CbPeekCtxLatch {
+    void *ctx; /* NULL == free slot */
+    ID3D11Buffer *slot0;
+    ID3D11Buffer *slot2;
+    ID3D11Buffer *slot3;
+    ID3D11VertexShader *vs;
+};
+static struct CbPeekCtxLatch g_cbpeek_latch[SEQ_CBPEEK_CTX_MAX];
 
 /* ---- helpers ---- */
 
@@ -616,6 +663,21 @@ static void seq_line(const void *ctx_ptr, int flush_now, const char *fmt, ...) {
     seq_finish_locked(flush_now);
 }
 
+/* Writes "floats=[f0 f1 ... fn-1]" to g_seq_fp. Caller holds g_seq_cs
+ * (i.e. called between a seq_begin_locked()/seq_finish_locked() pair, same
+ * two-phase convention as VSSETCB/VSSETCB1's multi-field lines). `n` is
+ * variable (Task 6: the content-fingerprint extension from a fixed 4
+ * floats to up to 8, per the discovery brief, so a later analysis pass can
+ * correlate mapped buffers to bound slot0/2/3 pointers by content). */
+static void seq_write_floats_locked(const float *f, int n) {
+    int i;
+    fprintf(g_seq_fp, "floats=[");
+    for (i = 0; i < n; i++) {
+        fprintf(g_seq_fp, "%s%.4f", (i == 0) ? "" : " ", (double)f[i]);
+    }
+    fprintf(g_seq_fp, "]");
+}
+
 /* ---- deferred-context discovery + late hooking (Task 5 addendum 3) ----
  *
  * Reads `ctx`'s own vtable pointer and, if it differs from the immediate
@@ -759,13 +821,288 @@ static int seq_skipcl_should_skip(void) {
     return g_skipcl_active;
 }
 
+/* ---- CBPEEK helpers (Task 6 Feature 2) ---- */
+
+/* Finds (or, if absent, allocates - overwriting slot 0 if the table is
+ * full, same policy as g_latch) the CbPeekCtxLatch entry for `ctx`.
+ * Caller holds g_seq_cs. Never returns NULL - SEQ_CBPEEK_CTX_MAX is never
+ * 0. */
+static struct CbPeekCtxLatch *cbpeek_find_or_alloc_locked(void *ctx) {
+    int i, free_slot = -1;
+    for (i = 0; i < SEQ_CBPEEK_CTX_MAX; i++) {
+        if (g_cbpeek_latch[i].ctx == ctx) {
+            return &g_cbpeek_latch[i];
+        }
+        if (free_slot < 0 && g_cbpeek_latch[i].ctx == NULL) {
+            free_slot = i;
+        }
+    }
+    if (free_slot < 0) {
+        free_slot = 0;
+    }
+    g_cbpeek_latch[free_slot].ctx = ctx;
+    g_cbpeek_latch[free_slot].slot0 = NULL;
+    g_cbpeek_latch[free_slot].slot2 = NULL;
+    g_cbpeek_latch[free_slot].slot3 = NULL;
+    g_cbpeek_latch[free_slot].vs = NULL;
+    return &g_cbpeek_latch[free_slot];
+}
+
+/* Called from Hook_VSSetCB (only while g_cbpeek_enabled) with the raw
+ * ppCB array it was invoked with, to latch whichever of slots 0/2/3 this
+ * call touches. Buffer pointers are stored WITHOUT an added reference -
+ * same convention already used everywhere else in this file (e.g.
+ * Hook_VSSetCB's own existing GetDesc() loop below dereferences ppCB[i]
+ * directly), on the assumption that a buffer currently bound for an
+ * upcoming draw stays alive at least that long. Caller holds g_seq_cs. */
+static void cbpeek_update_slots_locked(void *ctx, UINT startSlot, UINT numBuffers, ID3D11Buffer *const *ppCB) {
+    struct CbPeekCtxLatch *e = cbpeek_find_or_alloc_locked(ctx);
+    UINT i;
+    for (i = 0; i < numBuffers; i++) {
+        UINT slot = startSlot + i;
+        ID3D11Buffer *b = ppCB[i];
+        if (slot == 0) {
+            e->slot0 = b;
+        } else if (slot == 2) {
+            e->slot2 = b;
+        } else if (slot == 3) {
+            e->slot3 = b;
+        }
+    }
+}
+
+/* Called from Hook_VSSetShader (only while g_cbpeek_enabled) to latch the
+ * currently-bound VS per ctx, so Hook_DrawIndexed can pass it to
+ * mvp_offset_for_shader() at draw time. Caller holds g_seq_cs. */
+static void cbpeek_update_vs_locked(void *ctx, ID3D11VertexShader *vs) {
+    struct CbPeekCtxLatch *e = cbpeek_find_or_alloc_locked(ctx);
+    e->vs = vs;
+}
+
+/* FNV-1a 64, same constants/algorithm as shaderdump.c's own (private, not
+ * exported) fnv1a64() - duplicated rather than sharing a header for this
+ * small, self-contained hash so CBPEEK stays fully independent of
+ * shaderdump.c's internals, matching this file's existing "own detours,
+ * don't share hook bodies" independence policy (see seqdump.h). */
+static uint64_t seq_fnv1a64(const void *data, size_t len) {
+    const unsigned char *p = (const unsigned char *)data;
+    uint64_t h = 1469598103934665603ULL;
+    size_t i;
+    for (i = 0; i < len; i++) {
+        h ^= p[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+/* Does the actual staging-buffer create-if-needed + CopySubresourceRegion
+ * + Map(READ) + hash/mvp-read + Unmap sequence for one bound buffer, and
+ * logs a CBPEEK event line. Fail-safe throughout: every D3D11 call's
+ * HRESULT (or, for CreateBuffer/CopySubresourceRegion, the fact that a
+ * NULL/undersized result would be unusable) is checked, and any failure
+ * logs (rate-limited) and returns without touching the buffer/context
+ * further - this module never assumes success. `slot` is 0/2/3, `buf` is
+ * the bound VS constant buffer (already known non-NULL by the caller),
+ * `vs` is the currently-latched VS for the reflected mvpmatrixx offset (may
+ * be NULL - logged as unknown then). Called on the DEFERRED context's own
+ * worker thread; see the CBPEEK state block's doc comment above for the
+ * cross-thread caveat this cannot fully close. */
+static void seq_cbpeek_copy_and_log(ID3D11DeviceContext *deferred_ctx, UINT slot, ID3D11Buffer *buf,
+                                     ID3D11VertexShader *vs) {
+    D3D11_BUFFER_DESC desc;
+    D3D11_BOX box;
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    HRESULT hr;
+    UINT bw;
+    uint64_t hash;
+    int mvp_off;
+    float mvpf[4];
+    int have_mvp;
+
+    if (!d3d_capture_ready() || g_d3d.dev == NULL || g_d3d.ctx == NULL) {
+        return; /* real device/context not captured yet: nothing to copy into/from */
+    }
+
+    /* Read the bound buffer's own size synchronously - same "a currently-
+     * bound resource pointer is safe to dereference right now" convention
+     * Hook_VSSetCB's existing GetDesc() loop already relies on. */
+    ID3D11Buffer_GetDesc(buf, &desc);
+    bw = desc.ByteWidth;
+    if (bw == 0 || bw > SEQ_CBPEEK_STAGING_BYTES) {
+        return; /* wouldn't fit the fixed 2048B staging buffer; skip rather than truncate silently */
+    }
+
+    EnterCriticalSection(&g_cbpeek_cs);
+
+    if (g_cbpeek_staging == NULL && !g_cbpeek_staging_failed) {
+        D3D11_BUFFER_DESC sd;
+        memset(&sd, 0, sizeof(sd));
+        sd.ByteWidth = SEQ_CBPEEK_STAGING_BYTES;
+        sd.Usage = D3D11_USAGE_STAGING;
+        sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        hr = ID3D11Device_CreateBuffer(g_d3d.dev, &sd, NULL, &g_cbpeek_staging);
+        if (FAILED(hr) || g_cbpeek_staging == NULL) {
+            g_cbpeek_staging_failed = 1;
+            g_cbpeek_staging = NULL;
+            LeaveCriticalSection(&g_cbpeek_cs);
+            log_msg("seqdump/CBPEEK: failed to create %d-byte staging buffer (hr=0x%08lX); "
+                     "CBPEEK content reads disabled for the rest of this session",
+                     SEQ_CBPEEK_STAGING_BYTES, (unsigned long)hr);
+            return;
+        }
+    }
+    if (g_cbpeek_staging == NULL) {
+        LeaveCriticalSection(&g_cbpeek_cs);
+        return; /* staging creation already failed once this session; stay silent (already logged) */
+    }
+
+    memset(&box, 0, sizeof(box));
+    box.left = 0;
+    box.right = bw;
+    box.top = 0;
+    box.bottom = 1;
+    box.front = 0;
+    box.back = 1;
+    /* CopySubresourceRegion, not CopyResource: `buf` and the fixed-size
+     * staging buffer very rarely share the same ByteWidth (that IS the
+     * puzzle - slot0 is 1920B while reflected cb0 sizes are 96/160/224),
+     * and CopyResource requires matching dimensions for buffers.
+     * CopySubresourceRegion with an explicit byte box works regardless of
+     * the size mismatch, copying just the source buffer's own bytes into
+     * the front of the staging buffer. Runs on the IMMEDIATE context
+     * (g_d3d.ctx) per the brief - see the cross-thread caveat above. */
+    ID3D11DeviceContext_CopySubresourceRegion(g_d3d.ctx, (ID3D11Resource *)g_cbpeek_staging, 0, 0, 0, 0,
+                                               (ID3D11Resource *)buf, 0, &box);
+
+    hr = ID3D11DeviceContext_Map(g_d3d.ctx, (ID3D11Resource *)g_cbpeek_staging, 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(hr) || mapped.pData == NULL) {
+        LeaveCriticalSection(&g_cbpeek_cs);
+        if (seq_rate_limit_should_fire(&g_cbpeek_fail_log_count)) {
+            log_msg("seqdump/CBPEEK: staging Map(READ) failed (hr=0x%08lX) for res=0x%llX slot=%u "
+                     "bytewidth=%u; peek skipped for this draw (copy may not have landed, or the "
+                     "source buffer wasn't actually copyable - see report)",
+                     (unsigned long)hr, (unsigned long long)(uintptr_t)buf, slot, bw);
+        }
+        return;
+    }
+
+    hash = seq_fnv1a64(mapped.pData, bw);
+
+    mvp_off = -1;
+    have_mvp = 0;
+    memset(mvpf, 0, sizeof(mvpf));
+    if (vs != NULL) {
+        mvp_off = mvp_offset_for_shader(vs);
+        if (mvp_off >= 0 && (UINT)mvp_off + 16 <= bw) {
+            const float *f = (const float *)((const unsigned char *)mapped.pData + mvp_off);
+            mvpf[0] = f[0];
+            mvpf[1] = f[1];
+            mvpf[2] = f[2];
+            mvpf[3] = f[3];
+            have_mvp = 1;
+        }
+    }
+
+    ID3D11DeviceContext_Unmap(g_d3d.ctx, (ID3D11Resource *)g_cbpeek_staging, 0);
+
+    LeaveCriticalSection(&g_cbpeek_cs);
+
+    if (have_mvp) {
+        seq_line(deferred_ctx, 0,
+                  "CBPEEK slot=%u res=0x%llX size=%u hash=%016llX mvpoff=%d mvp=[%.4f %.4f %.4f %.4f]",
+                  slot, (unsigned long long)(uintptr_t)buf, bw, (unsigned long long)hash, mvp_off,
+                  (double)mvpf[0], (double)mvpf[1], (double)mvpf[2], (double)mvpf[3]);
+    } else {
+        seq_line(deferred_ctx, 0, "CBPEEK slot=%u res=0x%llX size=%u hash=%016llX mvpoff=%d mvp=<none>",
+                  slot, (unsigned long long)(uintptr_t)buf, bw, (unsigned long long)hash, mvp_off);
+    }
+}
+
+/* Looks up ctx's latched slot0/2/3 + VS under g_seq_cs, then peeks
+ * whichever of the three slots is actually bound (outside the lock - the
+ * copy/map work takes its own dedicated g_cbpeek_cs, see above). */
+static void seq_cbpeek_probe_draw(ID3D11DeviceContext *ctx) {
+    ID3D11Buffer *slot0, *slot2, *slot3;
+    ID3D11VertexShader *vs;
+
+    EnterCriticalSection(&g_seq_cs);
+    {
+        int i, idx = -1;
+        for (i = 0; i < SEQ_CBPEEK_CTX_MAX; i++) {
+            if (g_cbpeek_latch[i].ctx == (void *)ctx) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx >= 0) {
+            slot0 = g_cbpeek_latch[idx].slot0;
+            slot2 = g_cbpeek_latch[idx].slot2;
+            slot3 = g_cbpeek_latch[idx].slot3;
+            vs = g_cbpeek_latch[idx].vs;
+        } else {
+            slot0 = slot2 = slot3 = NULL;
+            vs = NULL;
+        }
+    }
+    LeaveCriticalSection(&g_seq_cs);
+
+    if (slot0 != NULL) {
+        seq_cbpeek_copy_and_log(ctx, 0, slot0, vs);
+    }
+    if (slot2 != NULL) {
+        seq_cbpeek_copy_and_log(ctx, 2, slot2, vs);
+    }
+    if (slot3 != NULL) {
+        seq_cbpeek_copy_and_log(ctx, 3, slot3, vs);
+    }
+}
+
+/* Called from Hook_DrawIndexed (only while g_cbpeek_enabled && seq_active())
+ * for EVERY DrawIndexed call; itself decides whether `ctx` is a deferred
+ * flavor and whether the SEQ_CBPEEK_MAX_DRAWS budget is still available,
+ * so the caller doesn't need to duplicate either check. Uses the same
+ * vtbl != g_immediate_vtbl flavor test as seq_maybe_late_hook_deferred_ctx()
+ * elsewhere in this file - "deferred DrawIndexed calls" per the brief. */
+static void seq_cbpeek_maybe_probe(ID3D11DeviceContext *ctx) {
+    void **vtbl;
+    LONG n;
+
+    if (ctx == NULL) {
+        return;
+    }
+    vtbl = *(void ***)ctx;
+    if ((void *)vtbl == g_immediate_vtbl) {
+        return; /* brief's scope is DEFERRED draws only */
+    }
+
+    n = InterlockedIncrement(&g_cbpeek_draw_count);
+    if (n > SEQ_CBPEEK_MAX_DRAWS) {
+        return; /* budget exhausted for this session */
+    }
+
+    seq_cbpeek_probe_draw(ctx);
+}
+
 /* ---- detours ---- */
 
 static HRESULT STDMETHODCALLTYPE Hook_Map(ID3D11DeviceContext *ctx, ID3D11Resource *res, UINT sub,
                                            D3D11_MAP mapType, UINT flags,
                                            D3D11_MAPPED_SUBRESOURCE *mapped) {
-    Map_t orig = (Map_t)seq_resolve_orig(ctx, VTBL_CTX_MAP);
+    Map_t orig;
     HRESULT hr;
+
+    /* Task 6 Feature 1: a fill/streaming deferred context that only ever
+     * Maps/Unmaps (never Draws or FinishCommandList) previously stayed
+     * invisible to seq_maybe_late_hook_deferred_ctx() forever - it was
+     * only ever called from the Draw/FinishCommandList hooks. Calling it
+     * here too (same idempotent, address-keyed, safe-to-call-from-a-live-
+     * detour guarantee documented on that function) means such a context
+     * gets its own vtable's Map/Unmap/VSSetShader/VSSetConstantBuffers
+     * late-hooked the first time it Maps anything, not just the first time
+     * it Draws. */
+    seq_maybe_late_hook_deferred_ctx(ctx);
+
+    orig = (Map_t)seq_resolve_orig(ctx, VTBL_CTX_MAP);
 
     if (orig == NULL) {
         /* Should be unreachable even after seq_resolve_orig()'s fallback
@@ -809,6 +1146,11 @@ static HRESULT STDMETHODCALLTYPE Hook_Map(ID3D11DeviceContext *ctx, ID3D11Resour
 static void STDMETHODCALLTYPE Hook_Unmap(ID3D11DeviceContext *ctx, ID3D11Resource *res, UINT sub) {
     Unmap_t orig;
 
+    /* Task 6 Feature 1: see the matching comment in Hook_Map - Unmap is
+     * the other half of a fill/streaming context's typical call pattern,
+     * so it gets the same late-hook discovery call. */
+    seq_maybe_late_hook_deferred_ctx(ctx);
+
     if (seq_active()) {
         UINT bw;
         if (resource_is_cb_le8192(res, &bw)) {
@@ -825,10 +1167,21 @@ static void STDMETHODCALLTYPE Hook_Unmap(ID3D11DeviceContext *ctx, ID3D11Resourc
             LeaveCriticalSection(&g_seq_cs);
 
             if (got && data != NULL && latched_bw >= 16) {
-                const float *f = (const float *)data;
-                seq_line(ctx, 0, "UNMAP res=0x%llX bytewidth=%u floats=[%.4f %.4f %.4f %.4f]",
-                          (unsigned long long)(uintptr_t)res, bw,
-                          (double)f[0], (double)f[1], (double)f[2], (double)f[3]);
+                /* Task 6: content fingerprint extended from a fixed 4
+                 * floats to up to 8 (capped by however many actually fit
+                 * in the mapped region), so a later analysis pass can
+                 * correlate a fill's content to the bound slot0/2/3
+                 * pointer by more than just the first row. */
+                int nf = (int)(latched_bw / 4);
+                if (nf > 8) {
+                    nf = 8;
+                }
+                if (seq_begin_locked(ctx)) {
+                    fprintf(g_seq_fp, "UNMAP res=0x%llX bytewidth=%u ",
+                             (unsigned long long)(uintptr_t)res, bw);
+                    seq_write_floats_locked((const float *)data, nf);
+                    seq_finish_locked(0);
+                }
             } else {
                 /* Latch miss (brief: "if the latch misses, log UNMAP
                  * without floats"), or a mapped CB too small to hold 4
@@ -874,6 +1227,22 @@ static void STDMETHODCALLTYPE Hook_VSSetCB(ID3D11DeviceContext *ctx, UINT startS
                                             ID3D11Buffer *const *ppCB) {
     VSSetCB_t orig;
 
+    /* Task 6 Feature 1: see the matching comment in Hook_Map - a
+     * fill/streaming context binding buffers via VSSetConstantBuffers
+     * (with or without ever Mapping anything itself) also gets discovered
+     * here now. */
+    seq_maybe_late_hook_deferred_ctx(ctx);
+
+    /* Task 6 Feature 2 (CBPEEK): latch which buffer is now bound at slots
+     * 0/2/3 for this ctx, so a later DrawIndexed on the same ctx knows
+     * what to peek at. Skipped entirely (not even the lock) when CBPEEK is
+     * off - "cheap-off" per the brief. */
+    if (g_cbpeek_enabled && ppCB != NULL) {
+        EnterCriticalSection(&g_seq_cs);
+        cbpeek_update_slots_locked((void *)ctx, startSlot, numBuffers, ppCB);
+        LeaveCriticalSection(&g_seq_cs);
+    }
+
     if (ppCB != NULL && seq_begin_locked(ctx)) {
         UINT n = (numBuffers > 4) ? 4 : numBuffers;
         UINT i;
@@ -913,6 +1282,15 @@ static void STDMETHODCALLTYPE Hook_VSSetShader(ID3D11DeviceContext *ctx, ID3D11V
         } else {
             seq_line(ctx, 0, "VSSETSHADER ptr=0x%llX hash=?", (unsigned long long)(uintptr_t)vs);
         }
+    }
+
+    /* Task 6 Feature 2 (CBPEEK): latch the currently-bound VS for this
+     * ctx so a later DrawIndexed can pass it to mvp_offset_for_shader().
+     * Skipped entirely when CBPEEK is off. */
+    if (g_cbpeek_enabled) {
+        EnterCriticalSection(&g_seq_cs);
+        cbpeek_update_vs_locked((void *)ctx, vs);
+        LeaveCriticalSection(&g_seq_cs);
     }
 
     orig = (VSSetShader_t)seq_resolve_orig(ctx, VTBL_CTX_VSSETSHADER);
@@ -996,6 +1374,15 @@ static void STDMETHODCALLTYPE Hook_DrawIndexed(ID3D11DeviceContext *ctx, UINT id
     seq_maybe_late_hook_deferred_ctx(ctx);
     if (seq_active()) {
         seq_line(ctx, 0, "DRAW variant=DrawIndexed count=%u", idxCount);
+    }
+    /* Task 6 Feature 2 (CBPEEK): peek the bound VS slot0/2/3 buffer
+     * content BEFORE calling through, per the brief ("before calling the
+     * original draw"). seq_cbpeek_maybe_probe() itself checks the
+     * deferred-only scope and the 300-draw budget, so this call is a
+     * no-op (one int compare) whenever CBPEEK is off or capture isn't
+     * armed yet. */
+    if (g_cbpeek_enabled && seq_active()) {
+        seq_cbpeek_maybe_probe(ctx);
     }
     g_drawindexed_orig(ctx, idxCount, startIdx, baseVtx);
 }
@@ -1248,6 +1635,16 @@ void seqdump_install(ID3D11DeviceContext *dummy_ctx) {
         g_seq_armfile_mode = (alen > 0 && alen < sizeof(aflag) && strcmp(aflag, "1") == 0);
     }
 
+    {
+        /* Task 6 Feature 2: TEWVR_CBPEEK=1 is its own separate, cheap-off
+         * gate on top of TEWVR_SEQDUMP=1 - only meaningful alongside it,
+         * since CBPEEK reuses seqdump's own Draw/VSSetCB/VSSetShader
+         * hooks and armed/capture state. */
+        char cflag[8];
+        DWORD clen = GetEnvironmentVariableA("TEWVR_CBPEEK", cflag, sizeof(cflag));
+        g_cbpeek_enabled = (clen > 0 && clen < sizeof(cflag) && strcmp(cflag, "1") == 0);
+    }
+
     if (!seqdump_open_logfile()) {
         log_msg("seqdump: failed to open seqdump.log; skipping event-stream hooks");
         return;
@@ -1255,6 +1652,15 @@ void seqdump_install(ID3D11DeviceContext *dummy_ctx) {
 
     InitializeCriticalSection(&g_seq_cs);
     g_seq_cs_ready = 1;
+
+    /* Task 6 Feature 2: g_cbpeek_cs is created unconditionally alongside
+     * g_seq_cs (cheap either way - InitializeCriticalSection is a one-time
+     * cost, not a hot-path one), but every call site that actually DOES
+     * anything with it is gated on g_cbpeek_enabled, so it sits unused
+     * (and the staging buffer is never created) whenever TEWVR_CBPEEK is
+     * unset. */
+    InitializeCriticalSection(&g_cbpeek_cs);
+    g_cbpeek_cs_ready = 1;
 
     if (!mh_glue_init()) {
         log_msg("seqdump: MinHook init failed; skipping event-stream hooks");
@@ -1358,11 +1764,20 @@ void seqdump_install(ID3D11DeviceContext *dummy_ctx) {
              g_seq_armfile_mode ? "seqarm.txt file-trigger" : "frame-301 auto",
              SEQDUMP_MAX_EVENTS);
 
+    /* Task 6 Feature 2: log CBPEEK's on/off state explicitly (its own
+     * staging buffer isn't created until the first eligible draw actually
+     * happens - see seq_cbpeek_copy_and_log() - so there is nothing more
+     * concrete to report yet at install time). */
+    log_msg("seqdump: TEWVR_CBPEEK=%s (draw-time constant-buffer content read, capped at %d "
+             "deferred DrawIndexed calls after arm)",
+             g_cbpeek_enabled ? "1 (armed)" : "unset (off)", SEQ_CBPEEK_MAX_DRAWS);
+
     if (g_seq_hooks_ok && g_seq_fp != NULL) {
-        fprintf(g_seq_fp, "TEWVR seqdump session start (TEWVR_SEQDUMP=1%s); hooks: map=%d unmap=%d "
+        fprintf(g_seq_fp, "TEWVR seqdump session start (TEWVR_SEQDUMP=1%s%s); hooks: map=%d unmap=%d "
                  "update=%d vscb=%d vsset=%d di=%d d=%d dii=%d dinst=%d vscb1=%d finishcl=%d executecl=%d "
                  "rsvp=%d omrt=%d\n",
                  g_seq_armfile_mode ? ", TEWVR_SEQDUMP_ARMFILE=1 (arm via seqarm.txt)" : "",
+                 g_cbpeek_enabled ? ", TEWVR_CBPEEK=1 (draw-time cb content read)" : "",
                  ok_map, ok_unmap, ok_update, ok_vscb, ok_vsset, ok_di, ok_d, ok_dii, ok_dinst, ok_vscb1,
                  ok_finishcl, ok_executecl, ok_rsvp, ok_omrt);
         fflush(g_seq_fp);
@@ -1375,10 +1790,26 @@ void seqdump_remove(void) {
     }
 
     g_seq_hooks_ok = 0;
+    g_cbpeek_enabled = 0;
 
     if (g_seq_fp) {
         fclose(g_seq_fp);
         g_seq_fp = NULL;
+    }
+
+    /* Task 6 Feature 2: must run BEFORE g_seq_cs is torn down (the CBPEEK
+     * helpers above take g_seq_cs too) and AFTER g_cbpeek_enabled is
+     * cleared (so this ordering itself doesn't matter for correctness -
+     * belt and suspenders, since mh_glue_shutdown() has already disabled
+     * every trampoline by the time this runs, same ordering contract the
+     * rest of this function relies on). */
+    if (g_cbpeek_cs_ready) {
+        if (g_cbpeek_staging != NULL) {
+            ID3D11Buffer_Release(g_cbpeek_staging);
+            g_cbpeek_staging = NULL;
+        }
+        DeleteCriticalSection(&g_cbpeek_cs);
+        g_cbpeek_cs_ready = 0;
     }
 
     DeleteCriticalSection(&g_seq_cs);
