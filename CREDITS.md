@@ -61,8 +61,3 @@ us by opening a GitHub issue. We will honour that request promptly — no
 argument and no delay — and we will find another way to do the job that does
 not rely on your material. This is your work; we are only grateful to have
 learned from it.
-
-This standing offer is for the actual owners and creators of the material in
-question. It does not extend to unrelated parties objecting to the existence of
-AI-assisted work in general, who are neither the owners nor the creators of
-anything used here.
