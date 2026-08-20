@@ -24,7 +24,12 @@
  * Entirely fail-safe: D3DReflect unavailable, reflection failure, or
  * missing constant buffer/variables all log once (or once per shader) and
  * leave the table/log line recording mvpx=-1 - never crashes, never
- * retries a hash it has already recorded.
+ * retries a hash it has already recorded. This holds even under
+ * concurrent CreateVertexShader calls for identical bytecode on different
+ * threads: the table insert and the mvp_offsets.log line are written
+ * together under one lock acquisition (mvp_record_locked(), post-Task-5-
+ * review fix), so at most one line per hash is ever appended, never a
+ * duplicate from a racing thread.
  */
 
 /* Call once, before any mvptable_on_shader_created() calls, only when

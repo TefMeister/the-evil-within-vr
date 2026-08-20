@@ -24,12 +24,24 @@
  *     see shaderdump.c's g_cvs_hook_active for why that map is populated
  *     even in a TEWVR_SEQDUMP-only run).
  *   ID3D11DeviceContext::DrawIndexed/Draw/DrawIndexedInstanced/DrawInstanced.
+ *   ID3D11DeviceContext::FinishCommandList/ExecuteCommandList (review
+ *     addendum 2 - see below) - to detect deferred-context command-list
+ *     recording/submission.
  *   ID3D11DeviceContext1::VSSetConstantBuffers1 (if the dummy context QIs
  *     to ID3D11DeviceContext1 at install time) - detects/records whether
  *     the engine binds cb ranges with D3D11.1-style offsets.
  *
  * One line per event to %LOCALAPPDATA%\TEWVR\seqdump.log, with a
- * monotonically increasing sequence number and thread id on every line.
+ * monotonically increasing sequence number, thread id, AND the
+ * ID3D11DeviceContext(/1) pointer the event fired on (`ctx=0x...`) on
+ * every line - added post-Task-5-review (addendum 2) after a gameplay
+ * capture showed draws arriving from six distinct threads while every
+ * state-setting event (VSSETSHADER/VSSETCB/MAP) stayed on the render
+ * thread, suggesting deferred contexts recording command lists on worker
+ * threads; the ctx= field plus the new FinishCommandList/ExecuteCommandList
+ * events let a later analysis pass confirm or refute that directly from
+ * the log instead of guessing from thread ids alone.
+ *
  * By default, capture arms 300 frames after the first Present (skip
  * loading screens); then captures the first 40,000 events before writing
  * a final "SEQDUMP COMPLETE" line and going silent.

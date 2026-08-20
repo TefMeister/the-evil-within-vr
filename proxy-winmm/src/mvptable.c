@@ -83,6 +83,30 @@ static struct MvpEntry *mvp_find_or_add_locked(uint64_t hash) {
     return NULL;
 }
 
+/* Atomic check-and-reserve, caller holds g_mvp_cs - mirrors shaderdump.c's
+ * hash_already_dumped_locked() (check-and-mark under one lock acquisition,
+ * so nothing outside the lock can observe a state where the table says
+ * "known" but the log line hasn't been written yet, or vice versa).
+ * Returns 1 if `hash` was already present (another thread reflected this
+ * exact blob and recorded it first - e.g. concurrent CreateVertexShader
+ * calls on the same DXBC bytecode racing past the earlier, unlocked,
+ * fast-path check in mvptable_on_shader_created()); the caller must then
+ * skip writing another mvp_offsets.log line for it. Returns 0 and inserts
+ * the entry otherwise - the caller (still holding the lock) is then, and
+ * only then, responsible for the log line. */
+static int mvp_record_locked(uint64_t hash, UINT cb0_size, int mvpx_offset) {
+    struct MvpEntry *e = mvp_find_locked(hash);
+    if (e != NULL) {
+        return 1;
+    }
+    e = mvp_find_or_add_locked(hash);
+    if (e != NULL) {
+        e->cb0_size = cb0_size;
+        e->mvpx_offset = mvpx_offset;
+    }
+    return 0;
+}
+
 /* ---- D3DReflect lazy load ---- */
 
 static int ensure_d3dreflect(void) {
@@ -267,15 +291,17 @@ void mvptable_on_shader_created(uint64_t hash, const void *bytecode, SIZE_T leng
 
     refl->lpVtbl->Release(refl);
 
+    /* Re-check-and-reserve atomically under one lock acquisition (TOCTOU
+     * fix, post-review): the fast-path check above was released before
+     * this (necessarily unlocked, D3DReflect-calling) reflection work ran,
+     * so another thread could have reflected and recorded the identical
+     * hash in the meantime (two threads racing CreateVertexShader with
+     * the same bytecode). mvp_record_locked() reports whether THIS thread
+     * won that race; only the winner writes the log line, so
+     * mvp_offsets.log can never get two lines for the same hash. */
     EnterCriticalSection(&g_mvp_cs);
-    {
-        struct MvpEntry *e = mvp_find_or_add_locked(hash);
-        if (e != NULL) {
-            e->cb0_size = (UINT)cb0_size;
-            e->mvpx_offset = mvpx;
-        }
-    }
-    if (g_mvp_fp != NULL) {
+    already = mvp_record_locked(hash, (UINT)cb0_size, mvpx);
+    if (!already && g_mvp_fp != NULL) {
         fprintf(g_mvp_fp, "hash=%016llX cb0=%d mvpx=%d contiguous=%d\n",
                  (unsigned long long)hash, cb0_size, mvpx, contiguous);
         fflush(g_mvp_fp);
