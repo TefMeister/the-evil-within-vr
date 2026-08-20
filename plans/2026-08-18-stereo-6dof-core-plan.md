@@ -347,44 +347,139 @@ Done when a second full render of the scene has been produced on screen at least
 
 ---
 
-### Task 6: Camera matrix override plumbing
+### Task 6: Per-draw MVP override — the keystone camera-ownership proof
 
-Turn Task 4's read-only knowledge into a controlled write: intercept the camera cbuffer upload and substitute a modified view/projection. Prove control by injecting a deliberate yaw offset and seeing the in-game view rotate.
+> **Supersedes the original task text below the design line.** The original
+> "one view/proj upload path" design is dead — ruled out by the ledger on
+> 2026-08-20 (no shared view/proj buffer exists; every draw carries its own
+> MVP; the world is drawn on deferred contexts). This rewrite reflects the
+> decided design from the Task 6 discovery ledger entries
+> (`.superpowers/sdd/2026-08-18-stereo-6dof-core-plan/progress.md`,
+> 2026-08-20 entries). This IS the Playbook Phase 4 keystone proof — the
+> feasibility go/no-go for the whole conversion.
+
+**Design (decided):** patch the MVP of each deferred-recorded world draw at
+record time. At each deferred `DrawIndexed`, read the currently-bound VS
+slot-0 constant buffer's MVP rows at `mvp_offset_for_shader(current_vs)`
+(Task 5's reflection table), left-multiply by a constant test matrix `K`,
+write the patched rows into our own scratch constant buffer, rebind VS slot
+0 to it, then call the original draw — so the substitution is what gets
+recorded into the command list and replayed. Skip (call the original draw
+unpatched) if the current VS has no known offset. `K` here is a pure test
+rotation (`TEWVR_TEST_YAW`) — not yet a real per-eye matrix; that is Task 7/8,
+which the ledger notes effectively merge with this patch mechanism (same
+substitute-and-rebind point, `K_eye` instead of a test yaw, executed twice
+per draw into each half-viewport).
 
 **Files:**
-- Create: `proxy-winmm/src/camera.c`, `proxy-winmm/src/camera.h`
-- Modify: `proxy-winmm/src/hooks.c` (narrow the Task 4 hooks to the one real upload path; apply override)
+- Create: `proxy-winmm/src/mvp_patch.c`, `proxy-winmm/src/mvp_patch.h`
+- Modify: `proxy-winmm/src/camera.c`, `proxy-winmm/src/camera.h` (repurposed
+  to generic 4x4 matrix helpers — drop the `camera_set_override`/view-proj
+  design, it does not apply to this engine)
+- Modify: `proxy-winmm/src/hooks.c` (install the Draw/DrawIndexed hooks
+  alongside the existing late-hook machinery from Task 5 addendum 3)
 
 **Interfaces:**
-- Produces: `typedef struct { float m[16]; } Mat4;` and
-  `void camera_set_override(const Mat4 *view, const Mat4 *proj);`,
-  `void camera_clear_override(void);`,
-  `bool camera_get_last_view(Mat4 *out);` (the most recent engine view, for eye-offset math).
-- Produces: `Mat4 mat4_mul(Mat4 a, Mat4 b);`, `Mat4 mat4_translation_local(const Mat4 *view, float dx);` (offset along the view's right axis) — used by Task 8.
+- Produces: `Mat4`, `Mat4 mat4_mul(Mat4 a, Mat4 b)`, `Mat4 mat4_rotation_y(float degrees)`,
+  `Mat4 mat4_translation_local(const Mat4 *view, float dx)` (Task 8 reuses both).
+- Produces: `void mvp_patch_install(void)`, `void mvp_patch_remove(void)`.
+- Consumes: `mvp_offset_for_shader` (Task 5's `mvptable.c`), the address-keyed
+  late-hook dispatch table (Task 5 addendum 3, `g_hooked_funcs`), `d3d_capture` (Task 3).
 
-- [ ] **Step 1: Narrow the hook to the real upload path**
+- [ ] **Step 0 (required first — resolve the read-mechanism risk before writing the patch loop):**
 
-Using Task 4's finding, keep only the hook on the API/slot that actually carries the camera matrices; remove the broad logging hooks. On each upload, copy the engine's view/projection into `camera_get_last_view` state.
+  The Task 6 discovery probe (`TEWVR_CBPEEK`) read draw-time cb0 contents via
+  a GPU staging-copy readback. That was safe as a one-shot discovery capture,
+  but calling a synchronous staging-copy readback on every one of ~1900
+  deferred draws/frame is a different proposition: it is likely far too slow
+  for real-time use, and a `CopyResource`+`Map` readback is normally an
+  immediate-context/GPU-round-trip operation — issuing it from inside a
+  deferred-context Draw hook (a worker thread) risks a severe stall or a
+  threading violation. This was not resolved by the discovery work and must
+  be settled before Step 1:
+  (a) **First choice:** capture the buffer's CPU-writable pointer directly.
+      The ~6 pool buffers were never seen being `Map`ped during gameplay
+      capture, meaning the persistent map happened before our hooks were
+      live — but check whether the pool is recreated on a level/scene
+      transition (a fresh `Map` after our hooks are installed); if so, latch
+      the returned pointer with a proper `AddRef` on the buffer (this also
+      fixes the CBPEEK review's Important dangling-pointer finding) and read
+      it directly with no GPU op.
+  (b) **If no in-hook Map ever fires**, try hooking `ID3D11Device::CreateBuffer`
+      (not yet hooked) to catch the pool buffers' creation and immediately
+      issue our own `Map` to capture the pointer at creation time, then never
+      `Unmap` (mirroring the engine's own pattern). Verify the engine
+      tolerates a foreign `Map` on its own buffer without conflict — test
+      carefully, the save is disposable if this destabilises the game.
+  (c) **Fallback only if (a) and (b) both fail:** a staging-copy read, but
+      batched once per frame (not per-draw) — copy each of the ~6 pool
+      buffers on the immediate context right after `Present`, giving a CPU
+      snapshot to patch from during the *next* frame's recording (one frame
+      of staleness, acceptable for a rotation proof).
+  Document the chosen mechanism and why in `notes/06-camera-matrix-discovery.md`.
+  **Gate:** do not proceed to Step 1 until the chosen read path runs every
+  frame without a measured stall (watch `Present` cadence in the log) and
+  without corrupting engine state.
 
-- [ ] **Step 2: Apply an override when set**
+- [ ] **Step 1: Build the scratch constant-buffer pool**
 
-When `camera_set_override` is active, rewrite the matrix bytes in the outgoing buffer (respecting the layout documented in Task 4) before calling the original upload.
+  A ring of `ID3D11Buffer*` (DYNAMIC, `D3D11_MAP_WRITE_DISCARD`-able, sized
+  to the largest observed cb0, e.g. 256 B). Size generously (start at 64;
+  log + grow or wrap-with-a-warning if exhausted within a frame) — many
+  recorded draws each need distinct patched contents within one frame.
 
-- [ ] **Step 3: Prove control with a yaw offset**
+- [ ] **Step 2: Install the Draw/DrawIndexed hooks**
 
-Temporarily, behind `TEWVR_TEST_YAW` (degrees), multiply the engine view by a yaw rotation and set it as the override each frame.
+  Reuse the address-keyed late-hook dispatch table from Task 5 addendum 3
+  (register-between-create-and-enable discipline; fail loud + remove hook on
+  table-full, per the addendum-3 review fixes — do not regress these). On
+  each hooked `DrawIndexed`: using Step 0's read path, read the bound slot-0
+  MVP rows at the shader's reflected offset; skip (call original unmodified)
+  if the shader is unknown to `mvp_offset_for_shader`. Else compute
+  `mvp' = K * mvp` (K = identity unless `TEWVR_TEST_YAW` is set), take the
+  next scratch buffer from the ring, `Map(WRITE_DISCARD)` the full original
+  cb0 bytes with only the MVP rows replaced, `Unmap`,
+  `VSSetConstantBuffers(0, 1, &scratch)`, call the original draw, then rebind
+  the engine's original buffer to slot 0 (so any later draw on the same
+  context that reuses the binding is unaffected by our substitution).
 
-- [ ] **Step 4: Runtime test**
+- [ ] **Step 3: Runtime test — the keystone proof**
 
-Launch, reach gameplay. Pre-state (`TEWVR_TEST_YAW` unset): the view is normal. With `TEWVR_TEST_YAW=20`: the rendered view is rotated 20° from where the player is actually facing, and returns to normal when unset. This proves we own the camera.
+  Pre-state (`TEWVR_TEST_YAW` unset): the game renders normally. With
+  `TEWVR_TEST_YAW=20` set before launch: the **entire visible world** (not
+  just hair/lights — confirm scenery and character bodies rotate, matching
+  the SKIPCL finding of what the deferred lists carry) is rotated ~20° from
+  the player's actual facing, stably, across at least 30 seconds of gameplay
+  including camera movement, with no crash or corruption. Returns to normal
+  immediately when the variable is unset. **This is the Phase 4 go/no-go
+  proof for the whole conversion.**
 
-- [ ] **Step 5: Ledger + commit**
+- [ ] **Step 4: Fail-safe check**
 
-Document in `notes/06-camera-matrix-discovery.md` that override works. Commit locally.
+  Force a failure path (e.g. temporarily make `mvp_offset_for_shader` always
+  return "not found") and confirm the game still renders normally (every
+  draw falls through unpatched), with a one-line log reason, no crash.
+
+- [ ] **Step 5: Ledger + dossier + commit**
+
+  Update `notes/06-camera-matrix-discovery.md` (keystone proof done, chosen
+  Step 0 read mechanism) and `the-evil-within-vr-engine-research/ENGINE-DOSSIER.md`
+  (status → Phase 4 complete / Phase 5 next; update open risks). Push doc
+  repos + the engine-research repo. Commit the mod repo locally (no push —
+  still push-gated).
 
 ---
 
 ### Task 7: StereoSink seam + BackbufferSink + double render (same matrix)
+
+> **Note (ledger, 2026-08-20):** Task 6's per-draw patch-at-record mechanism
+> and Task 7's double-render mechanism are now expected to merge: rather than
+> re-executing a command list per eye (the original re-execute-vs-rerecord
+> crux, now moot), the Task 6 Draw hook likely needs to inject the draw
+> *twice* per original call — once per eye, each with its own patched cb0 and
+> its own viewport (left/right half) — within the same recording pass. Revisit
+> and fully re-scope this task's steps against Task 6's actual landed
+> mechanism before writing code; the text below is the pre-Task-6 draft.
 
 Introduce the `IStereoSink` seam and the `BackbufferSink`, and render the scene twice per frame into the left and right halves of the back-buffer — using the **same** camera matrix for both eyes first, to isolate the double-render/viewport mechanics from the eye-offset math.
 
