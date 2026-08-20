@@ -1,5 +1,16 @@
 # The Evil Within VR — Status
 
+**2026-08-20, offline research pass** (while the human-witnessed Task 6
+runtime proof was pending): re-mined existing captures and statically
+disassembled already-dumped shaders (no game execution) to de-risk that
+proof — resolved the buffer-identity ambiguity flagged after Task 6's fix
+round, fully characterised the SMAA/motion-vector shader, and found a new
+architectural gap (some skinned-mesh geometry computes its final position in
+a Domain Shader, not the Vertex Shader, so it's currently unreachable by the
+patch and won't rotate in the yaw proof — expected, not a bug). Full
+write-up: [notes/09-offline-research.md](09-offline-research.md); findings
+folded into `ENGINE-DOSSIER.md`.
+
 Last updated: 2026-08-20 (session 4: **TASK 6 DISCOVERY CLOSED** — the world's
 per-object matrix is located). It lives in VS slot 0 (`constantBufferV`), at each
 shader's reflected `mvpmatrix` offset, inside a small pool of ~6 **persistently
