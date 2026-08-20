@@ -153,14 +153,42 @@ static int g_seq_armfile_mode = 0; /* TEWVR_SEQDUMP_ARMFILE=1: arm via seqarm.tx
  * that address, whether it was first hooked via the immediate vtable or
  * a late-hooked deferred one - correct regardless of how many distinct
  * vtable pointers happen to share that address. */
-#define SEQ_MAX_HOOKED_FUNCS 32
+/* 64 comfortably exceeds 6 late-hookable functions * a handful of
+ * distinct vtable flavors ever realistically expected (immediate + a
+ * couple of deferred-context implementations); see register_hooked_func_
+ * locked()'s fail-loud behavior at capacity (Task 5 review, Important
+ * finding 2) for what happens if it's ever exceeded anyway. */
+#define SEQ_MAX_HOOKED_FUNCS 64
 struct HookedFunc {
     void *addr; /* NULL == free slot; the raw target function address */
     void *orig; /* the trampoline MinHook gave us for that address */
 };
 static struct HookedFunc g_hooked_funcs[SEQ_MAX_HOOKED_FUNCS];
 static int g_hooked_funcs_count = 0;
+static int g_hooked_funcs_full_warned = 0;
 static void *g_immediate_vtbl = NULL; /* captured at install time from dummy_ctx */
+
+/* Rate-limits the two classes of per-call diagnostic log lines this
+ * module can hit on a hot path (Task 5 review, Important finding 3's
+ * rate-limiting request): logs the first SEQ_RATE_LIMIT_BURST occurrences
+ * of a given condition unconditionally, then only every
+ * SEQ_RATE_LIMIT_EVERY_NTH-th occurrence after that. A persistent
+ * per-draw/per-call miss could otherwise fire log_msg() (its own
+ * critical section + file I/O) at thousands of lines/sec and stall the
+ * render thread. `counter` is intentionally unlocked (InterlockedIncrement
+ * on a plain LONG) - a rate limiter's own occasional off-by-one under
+ * contention is immaterial; what matters is bounding the total volume. */
+#define SEQ_RATE_LIMIT_BURST 10
+#define SEQ_RATE_LIMIT_EVERY_NTH 500
+static int seq_rate_limit_should_fire(volatile LONG *counter) {
+    LONG n = InterlockedIncrement(counter);
+    if (n <= SEQ_RATE_LIMIT_BURST) {
+        return 1;
+    }
+    return (n % SEQ_RATE_LIMIT_EVERY_NTH) == 0;
+}
+static volatile LONG g_bug_log_count = 0;      /* "no original found, even after fallback" */
+static volatile LONG g_fallback_log_count = 0; /* "primary lookup missed, fallback succeeded" */
 
 /* Tracks which ctx pointers have already been inspected for late-hooking,
  * so the (locked) vtable comparison only ever runs once per distinct ctx
@@ -296,11 +324,36 @@ static void *find_hooked_orig_locked(void *addr) {
     return NULL;
 }
 
-static void register_hooked_func_locked(void *addr, void *orig) {
-    if (g_hooked_funcs_count < SEQ_MAX_HOOKED_FUNCS) {
-        g_hooked_funcs[g_hooked_funcs_count].addr = addr;
-        g_hooked_funcs[g_hooked_funcs_count].orig = orig;
-        g_hooked_funcs_count++;
+/* Returns 1 on success, 0 if the table is already full (Task 5 review,
+ * Important finding 2: the caller MUST NOT leave a hook enabled when
+ * this fails - an enabled-but-unregistered hook would silently swallow
+ * every future call through it forever, since no lookup could ever find
+ * its original again). */
+static int register_hooked_func_locked(void *addr, void *orig) {
+    if (g_hooked_funcs_count >= SEQ_MAX_HOOKED_FUNCS) {
+        return 0;
+    }
+    g_hooked_funcs[g_hooked_funcs_count].addr = addr;
+    g_hooked_funcs[g_hooked_funcs_count].orig = orig;
+    g_hooked_funcs_count++;
+    return 1;
+}
+
+/* Removes the entry for `addr`, if present. Used only on the rare
+ * mh_glue_enable() failure path immediately after a successful
+ * register_hooked_func_locked() (see hook_or_reuse_locked_guard()), so a
+ * future hook attempt on this same address can't reuse a trampoline
+ * pointer MinHook's own internal cleanup may already have freed.
+ * Swap-with-last removal - this table is never iterated for anything but
+ * exact-address lookups, so entry order doesn't matter. */
+static void unregister_hooked_func_locked(void *addr) {
+    int i;
+    for (i = 0; i < g_hooked_funcs_count; i++) {
+        if (g_hooked_funcs[i].addr == addr) {
+            g_hooked_funcs[i] = g_hooked_funcs[g_hooked_funcs_count - 1];
+            g_hooked_funcs_count--;
+            return;
+        }
     }
 }
 
@@ -309,12 +362,32 @@ static void register_hooked_func_locked(void *addr, void *orig) {
  * with another thread hooking the same address concurrently) - reuses
  * the EXISTING original instead of attempting (and safely failing) a
  * redundant MH_CreateHook call. Always fills `*out_orig` with a valid
- * original and returns 1 on success (fresh hook OR reuse); returns 0 only
- * if a genuinely fresh hook attempt failed AND no racing thread's
- * concurrent attempt succeeded either (checked again after our own
- * attempt, to close that race). Caller holds no lock (this takes
- * g_seq_cs itself, briefly, around each table access - the MinHook call
- * itself runs unlocked). */
+ * original and returns 1 on success (fresh hook OR reuse); returns 0 on
+ * genuine failure (MH_CreateHook/MH_EnableHook failed with no racing
+ * thread's concurrent attempt succeeding either, OR the hooked-function
+ * table is full).
+ *
+ * Task 5 review, Important finding 1: create and register BEFORE
+ * enabling (via the split mh_glue_create()/mh_glue_enable() - see
+ * minhook_glue.h), not create-and-enable-then-register. The original
+ * version here called the combined mh_glue_create_and_enable() and only
+ * afterward took g_seq_cs to publish into g_hooked_funcs - between
+ * MH_EnableHook() returning and the publish, the detour was already LIVE
+ * but undiscoverable, so any thread calling that address in that window
+ * got dropped (a real crash risk for Hook_Map specifically: engines
+ * rarely check Map's HRESULT, so an uninitialized D3D11_MAPPED_SUBRESOURCE
+ * silently read as valid is a realistic crash, not benign data loss).
+ * Registering before enabling closes that window entirely: the table
+ * entry always exists before the target's code can possibly redirect to
+ * `detour`.
+ *
+ * Important finding 2: if registration fails (table full), the hook is
+ * NEVER enabled - MH_RemoveHook() tears down the still-inert
+ * (never-enabled) hook immediately, and this logs loudly rather than
+ * silently leaving an undispatchable-but-live hook.
+ *
+ * Caller holds no lock (this takes g_seq_cs itself, briefly, around each
+ * table access - the MinHook calls themselves run unlocked). */
 static int hook_or_reuse_locked_guard(void *target, void *detour, void **out_orig, const char *name) {
     void *existing;
 
@@ -329,22 +402,115 @@ static int hook_or_reuse_locked_guard(void *target, void *detour, void **out_ori
 
     {
         void *orig = NULL;
-        int ok = mh_glue_create_and_enable(target, detour, &orig, name);
+        int created = mh_glue_create(target, detour, &orig, name);
+        int win;
 
+        if (!created) {
+            /* MH_CreateHook itself failed - possibly MH_ERROR_ALREADY_
+             * CREATED because a racing thread is concurrently creating
+             * this exact target right now. Re-check before giving up. */
+            EnterCriticalSection(&g_seq_cs);
+            existing = find_hooked_orig_locked(target);
+            LeaveCriticalSection(&g_seq_cs);
+            if (existing != NULL) {
+                *out_orig = existing;
+                return 1;
+            }
+            return 0;
+        }
+
+        /* Created (trampoline/orig filled) but NOT YET enabled - the
+         * target's code is still untouched, so no call can reach
+         * `detour` yet. Register now, while it is still safe to fail
+         * without anything having been dropped. */
         EnterCriticalSection(&g_seq_cs);
         existing = find_hooked_orig_locked(target);
-        if (existing == NULL && ok) {
-            register_hooked_func_locked(target, orig);
-            existing = orig;
-        }
+        win = (existing == NULL) ? register_hooked_func_locked(target, orig) : 0;
         LeaveCriticalSection(&g_seq_cs);
 
         if (existing != NULL) {
+            /* A racing thread already created+registered+enabled this
+             * exact target first. Our own MH_CreateHook succeeded but is
+             * a now-redundant, never-enabled duplicate - tear it down
+             * (safe: it was never made live) and use the winner's
+             * original. */
+            MH_RemoveHook(target);
             *out_orig = existing;
             return 1;
         }
-        return 0;
+
+        if (!win) {
+            /* Table genuinely full (Important finding 2): refuse to
+             * enable an address we could never dispatch again. Tear down
+             * the still-inert hook and fail loudly, once. */
+            MH_RemoveHook(target);
+            if (!g_hooked_funcs_full_warned) {
+                g_hooked_funcs_full_warned = 1;
+                log_msg("seqdump: g_hooked_funcs table full (%d); refusing to enable %s - "
+                         "that address will run UNHOOKED from here on (safe, just unobserved)",
+                         SEQ_MAX_HOOKED_FUNCS, name);
+            }
+            return 0;
+        }
+
+        /* Registered - only now is it safe to make the target live. */
+        if (!mh_glue_enable(target, name)) {
+            EnterCriticalSection(&g_seq_cs);
+            unregister_hooked_func_locked(target);
+            LeaveCriticalSection(&g_seq_cs);
+            return 0;
+        }
+
+        *out_orig = orig;
+        return 1;
     }
+}
+
+/* Looks up the original for the D3D11 method at `slot_index` on `ctx`'s
+ * OWN vtable, falling back to the immediate vtable's original for that
+ * same slot if the primary (ctx-vtable) lookup misses.
+ *
+ * Task 5 review, Important finding 3: a third-party D3D11 vtable
+ * patcher installed after this DLL (Steam overlay, RivaTuner/RTSS,
+ * ReShade, etc. commonly hook/rewrite individual vtable slots) could
+ * rewrite a slot we've already hooked, changing which address a FUTURE
+ * call for that same ctx actually goes through - the dynamic
+ * `(*(void***)ctx)[slot_index]` re-read this module relies on for
+ * dispatch would then miss even though the ctx itself is perfectly
+ * legitimate. Rather than dropping the call outright, fall back to the
+ * still-registered immediate-vtable original for the same slot, which is
+ * correct in the overwhelming majority of real-world cases (the called
+ * method's actual behavior for a given ctx flavor does not change just
+ * because a third party rewrote the vtable pointer that reaches it -
+ * only the ADDRESS through which OUR code would have found the original
+ * changes). Logs (rate-limited) when the fallback is actually used, so
+ * this staying silent means it never fired. */
+static void *seq_resolve_orig(ID3D11DeviceContext *ctx, int slot_index) {
+    void **vtbl = *(void ***)ctx;
+    void *primary_target = vtbl[slot_index];
+    void *orig;
+    int used_fallback = 0;
+
+    EnterCriticalSection(&g_seq_cs);
+    orig = find_hooked_orig_locked(primary_target);
+    if (orig == NULL && g_immediate_vtbl != NULL) {
+        void *fallback_target = ((void **)g_immediate_vtbl)[slot_index];
+        if (fallback_target != primary_target) {
+            orig = find_hooked_orig_locked(fallback_target);
+            if (orig != NULL) {
+                used_fallback = 1;
+            }
+        }
+    }
+    LeaveCriticalSection(&g_seq_cs);
+
+    if (used_fallback && seq_rate_limit_should_fire(&g_fallback_log_count)) {
+        log_msg("seqdump: vtable slot %d for ctx=%p (vtbl=%p) didn't resolve directly "
+                 "(possible third-party vtable patch - Steam overlay/RTSS/ReShade); "
+                 "used immediate-vtable fallback", slot_index, (void *)ctx, (void *)vtbl);
+    }
+
+    return orig;
 }
 
 /* ---- Map->Unmap latch (caller holds g_seq_cs) ---- */
@@ -598,26 +764,28 @@ static int seq_skipcl_should_skip(void) {
 static HRESULT STDMETHODCALLTYPE Hook_Map(ID3D11DeviceContext *ctx, ID3D11Resource *res, UINT sub,
                                            D3D11_MAP mapType, UINT flags,
                                            D3D11_MAPPED_SUBRESOURCE *mapped) {
-    Map_t orig;
+    Map_t orig = (Map_t)seq_resolve_orig(ctx, VTBL_CTX_MAP);
     HRESULT hr;
 
-    EnterCriticalSection(&g_seq_cs);
-    orig = (Map_t)find_hooked_orig_locked((*(void ***)ctx)[VTBL_CTX_MAP]);
-    LeaveCriticalSection(&g_seq_cs);
-
     if (orig == NULL) {
-        /* Should be unreachable: this detour only ever runs because
-         * MinHook redirected a call FROM some address to it, and every
-         * address we ever pass to MH_CreateHook for this detour is
-         * registered into g_hooked_funcs in the same breath
-         * (seqdump_install()/seq_maybe_late_hook_deferred_ctx() via
-         * hook_or_reuse_locked_guard()). Map has a return value + out-
-         * param the caller depends on; we cannot safely fabricate a
-         * mapped pointer, so the only fail-safe option left is a generic
-         * failure HRESULT rather than risking a crash by guessing which
-         * original to call. */
-        log_msg("seqdump: BUG - no Map original for ctx=%p vtbl=%p; call dropped",
-                 (void *)ctx, *(void ***)ctx);
+        /* Should be unreachable even after seq_resolve_orig()'s fallback
+         * (every address we ever pass to MH_CreateHook for this detour
+         * is registered before it can be reached - see
+         * hook_or_reuse_locked_guard()'s doc comment). Map has a return
+         * value + out-param the caller depends on; we cannot safely
+         * fabricate a mapped pointer, so the fail-safe options here are:
+         * a generic failure HRESULT (rather than guessing which original
+         * to call), AND zeroing *mapped first so a caller that does NOT
+         * check the HRESULT (common in practice) sees NULL pData instead
+         * of uninitialized stack garbage it might dereference as if it
+         * were a real mapped pointer. */
+        if (seq_rate_limit_should_fire(&g_bug_log_count)) {
+            log_msg("seqdump: BUG - no Map original for ctx=%p vtbl=%p (even after fallback); "
+                     "call dropped", (void *)ctx, *(void ***)ctx);
+        }
+        if (mapped != NULL) {
+            memset(mapped, 0, sizeof(*mapped));
+        }
         return E_FAIL;
     }
 
@@ -671,15 +839,13 @@ static void STDMETHODCALLTYPE Hook_Unmap(ID3D11DeviceContext *ctx, ID3D11Resourc
         }
     }
 
-    EnterCriticalSection(&g_seq_cs);
-    orig = (Unmap_t)find_hooked_orig_locked((*(void ***)ctx)[VTBL_CTX_UNMAP]);
-    LeaveCriticalSection(&g_seq_cs);
+    orig = (Unmap_t)seq_resolve_orig(ctx, VTBL_CTX_UNMAP);
 
     if (orig != NULL) {
         orig(ctx, res, sub);
-    } else {
-        log_msg("seqdump: BUG - no Unmap original for ctx=%p vtbl=%p; call dropped",
-                 (void *)ctx, *(void ***)ctx);
+    } else if (seq_rate_limit_should_fire(&g_bug_log_count)) {
+        log_msg("seqdump: BUG - no Unmap original for ctx=%p vtbl=%p (even after fallback); "
+                 "call dropped", (void *)ctx, *(void ***)ctx);
     }
 }
 
@@ -725,15 +891,13 @@ static void STDMETHODCALLTYPE Hook_VSSetCB(ID3D11DeviceContext *ctx, UINT startS
         seq_finish_locked(0);
     }
 
-    EnterCriticalSection(&g_seq_cs);
-    orig = (VSSetCB_t)find_hooked_orig_locked((*(void ***)ctx)[VTBL_CTX_VSSETCONSTANTBUFFERS]);
-    LeaveCriticalSection(&g_seq_cs);
+    orig = (VSSetCB_t)seq_resolve_orig(ctx, VTBL_CTX_VSSETCONSTANTBUFFERS);
 
     if (orig != NULL) {
         orig(ctx, startSlot, numBuffers, ppCB);
-    } else {
-        log_msg("seqdump: BUG - no VSSetConstantBuffers original for ctx=%p vtbl=%p; call dropped",
-                 (void *)ctx, *(void ***)ctx);
+    } else if (seq_rate_limit_should_fire(&g_bug_log_count)) {
+        log_msg("seqdump: BUG - no VSSetConstantBuffers original for ctx=%p vtbl=%p "
+                 "(even after fallback); call dropped", (void *)ctx, *(void ***)ctx);
     }
 }
 
@@ -751,15 +915,13 @@ static void STDMETHODCALLTYPE Hook_VSSetShader(ID3D11DeviceContext *ctx, ID3D11V
         }
     }
 
-    EnterCriticalSection(&g_seq_cs);
-    orig = (VSSetShader_t)find_hooked_orig_locked((*(void ***)ctx)[VTBL_CTX_VSSETSHADER]);
-    LeaveCriticalSection(&g_seq_cs);
+    orig = (VSSetShader_t)seq_resolve_orig(ctx, VTBL_CTX_VSSETSHADER);
 
     if (orig != NULL) {
         orig(ctx, vs, inst, n);
-    } else {
-        log_msg("seqdump: BUG - no VSSetShader original for ctx=%p vtbl=%p; call dropped",
-                 (void *)ctx, *(void ***)ctx);
+    } else if (seq_rate_limit_should_fire(&g_bug_log_count)) {
+        log_msg("seqdump: BUG - no VSSetShader original for ctx=%p vtbl=%p (even after fallback); "
+                 "call dropped", (void *)ctx, *(void ***)ctx);
     }
 }
 
@@ -777,15 +939,13 @@ static void STDMETHODCALLTYPE Hook_RSSetViewports(ID3D11DeviceContext *ctx, UINT
         }
     }
 
-    EnterCriticalSection(&g_seq_cs);
-    orig = (RSSetViewports_t)find_hooked_orig_locked((*(void ***)ctx)[VTBL_CTX_RSSETVIEWPORTS]);
-    LeaveCriticalSection(&g_seq_cs);
+    orig = (RSSetViewports_t)seq_resolve_orig(ctx, VTBL_CTX_RSSETVIEWPORTS);
 
     if (orig != NULL) {
         orig(ctx, numViewports, viewports);
-    } else {
-        log_msg("seqdump: BUG - no RSSetViewports original for ctx=%p vtbl=%p; call dropped",
-                 (void *)ctx, *(void ***)ctx);
+    } else if (seq_rate_limit_should_fire(&g_bug_log_count)) {
+        log_msg("seqdump: BUG - no RSSetViewports original for ctx=%p vtbl=%p (even after "
+                 "fallback); call dropped", (void *)ctx, *(void ***)ctx);
     }
 }
 
@@ -821,15 +981,13 @@ static void STDMETHODCALLTYPE Hook_OMSetRenderTargets(ID3D11DeviceContext *ctx, 
                   (unsigned long long)(uintptr_t)rtv0, (unsigned long long)(uintptr_t)dsv, rt0buf, dsbuf);
     }
 
-    EnterCriticalSection(&g_seq_cs);
-    orig = (OMSetRenderTargets_t)find_hooked_orig_locked((*(void ***)ctx)[VTBL_CTX_OMSETRENDERTARGETS]);
-    LeaveCriticalSection(&g_seq_cs);
+    orig = (OMSetRenderTargets_t)seq_resolve_orig(ctx, VTBL_CTX_OMSETRENDERTARGETS);
 
     if (orig != NULL) {
         orig(ctx, numViews, rtvs, dsv);
-    } else {
-        log_msg("seqdump: BUG - no OMSetRenderTargets original for ctx=%p vtbl=%p; call dropped",
-                 (void *)ctx, *(void ***)ctx);
+    } else if (seq_rate_limit_should_fire(&g_bug_log_count)) {
+        log_msg("seqdump: BUG - no OMSetRenderTargets original for ctx=%p vtbl=%p (even after "
+                 "fallback); call dropped", (void *)ctx, *(void ***)ctx);
     }
 }
 
