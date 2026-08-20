@@ -4,9 +4,14 @@
 > `PLAYBOOK.md` phases. Blow-by-blow history lives in the `-dev-archive` and
 > `-modding-notes` repos; this is the consolidated reference.
 
-**Status:** Phase 3→4 (engine model mostly built; keystone camera-override proof
-next). **VR-readiness verdict:** **feasible** — camera transform fully located,
-override mechanism identified; keystone proof and VR runtime still to do.
+**Status:** Phase 3→4 (engine model built; keystone camera-override *code*
+landed and reviewed clean 2026-08-20, runtime proof itself still pending a
+human-witnessed session). **VR-readiness verdict:** **feasible** — camera
+transform fully located, override mechanism identified, implemented, and
+statically de-risked by an offline research pass (2026-08-20: buffer-identity
+ambiguity resolved, SMAA/motion-vector shader fully characterised, a
+tessellation/Domain-Shader gap identified for future work — see dev-archive
+`notes/09-offline-research.md`); keystone proof and VR runtime still to do.
 
 ## 1. Identity
 - The Evil Within (2014), PC (Steam, app id 268050). 64-bit, ~38 MB exe.
@@ -80,20 +85,58 @@ override mechanism identified; keystone proof and VR runtime still to do.
 - Contents *are* readable at record time (proven via staging copy). The physical
   buffer is 1920 B; the shader reads only its small declared cb0 from the front,
   MVP at the reflected offset.
-- **Chosen patch point:** at each deferred draw, read the bound slot-0 MVP,
-  left-multiply by `K_eye`, write the patched cb0 into **our own** buffer, and
-  rebind slot 0 before the original draw → our buffer is recorded into the
-  command list. Preferred source read: capture the persistent CPU pointer (cheap,
-  no cross-thread GPU op); staging read-back is the hardened fallback.
+- **Chosen patch point (implemented, Task 6):** hook `ID3D11Device::CreateBuffer`
+  to catch the pool buffers at creation time and capture a direct, `AddRef`'d
+  CPU pointer via a foreign `Map` issued inline with creation (never `Unmap`d,
+  mirroring the engine's own pattern) — proven live: 16/16 foreign `Map` calls
+  succeeded in a menu-session smoke test, no conflict with the engine's own
+  access observed. At each deferred draw: read the bound slot-0 MVP through
+  that pointer, left-multiply by `K_eye`, write the patched cb0 into **our
+  own** scratch buffer (a per-thread TLS ring, to avoid two worker threads
+  ever `Map`ping the same scratch object), rebind slot 0 before the original
+  draw → our buffer is recorded into the command list. (An earlier once-per-
+  frame batched-staging-copy design was tried and rejected: too coarse to
+  supply genuinely distinct per-draw data — see dead ends below.)
+- **1920 bytes is not a unique fingerprint for the world pool** — a *different*,
+  unrelated pair of 1920-byte buffers also exists (a per-frame global,
+  refreshed once per `Present` via real `Map`/`Unmap` on the immediate
+  context, bound at VS slot 2/3, not slot 0). The two are reliably told apart
+  by binding slot + context (deferred, slot 0, never `Map`ped = the real
+  pool; immediate, slot 2/3, `Map`ped every frame = the impostor), not by
+  size alone. See §11.
 
 ## 8. Pass inventory (by render target)
 - Main scene: 1280×720 colour (formats 28/10/24/61/2 = G-buffer/HDR/aux) with
   1280×720 depth (fmt 44 = D24S8).
 - Shadow passes: depth-only, square, 256²–2048² (fmt 53).
-- Post/AA: downscaled 160×90 / 320×180 / 640×360 (bloom/SSAO chain); SMAA +
-  motion vectors consume `inversemvpmatrix` / `prevmvpmatrix` (need consistent
-  per-eye treatment later).
+- Post/AA: downscaled 160×90 / 320×180 / 640×360 (bloom/SSAO chain). The
+  SMAA/motion-vector shader is now fully characterised by static disassembly
+  (shader hash `736130AA89FA0E59`, `d3dcompiler_47.dll` via the project's
+  offline `dxbc_disasm` tool, no game execution needed): `constantBufferV`
+  holds `inversemvpmatrixx/y/z/w` at offsets 0/16/32/48 and
+  `prevmvpmatrixx/y/z/w` at 64/80/96/112, plus `smaajitter` at 128. Body:
+  reprojects a full-screen-triangle position through inverse-MVP then
+  prev-MVP (two `dp4` chains) — standard temporal reprojection for motion
+  vectors. Needs consistent per-eye treatment later (deferred, not scoped
+  for the stereo-core milestone).
 - HUD/post drawn on the immediate context, separable from the world.
+- **Tessellation pipeline confirmed** (`r_allowTessellation` cvar exists).
+  At least two skinned-mesh vertex shaders (`AF80AA9287F65EA7`, and by buffer
+  layout likely `62F67B34913B0238`) have **no `SV_Position` in their VS
+  output signature at all** — only `TEXCOORD0-4`/`WORLDPOS` — meaning the
+  final clip-space transform happens downstream in a **Domain Shader**, not
+  the VS. `mvp_patch` only patches VS-bound constant buffers, so draws using
+  this path will fail-safe-skip (shader correctly reports "no MVP rows
+  found") rather than rotate with the rest of the world during any yaw
+  proof. Likely candidate: detailed character skin/face geometry (these
+  shaders declare `jointBufferV`, i.e. skinned meshes). Not a patch bug if
+  observed — a known gap for future work (would need to hook the Domain
+  Shader's own constant buffers the same way). See §12.
+- `jointBufferV` (skinning palette) declared as `float4 matrices[768]`
+  (12,288 B, room for 192 joints) in the reflection data of both skinned-mesh
+  shaders above; one observed live instance is a smaller, double-buffered
+  8,064-byte pair (126 joints) — refines the earlier "~8 KB" estimate with
+  exact numbers.
 
 ## 9. cvar / console cheat sheet
 | command / cvar | effect | use |
@@ -108,13 +151,36 @@ override mechanism identified; keystone proof and VR runtime still to do.
 | `g_viewNodalX` / `g_viewNodalZ` | view-origin nodal offsets | view polish |
 | `pm_crouch/normalviewheight`, `pm_min/maxviewpitch` | view height / pitch clamps | comfort |
 | `g_stopTime`, `g_debugPlayer`, `g_skipViewEffects` | time-stop / debug / skip post | testing |
+| `noclip <on/off>`, `pm_noclipspeed` | free camera, no collision | testing |
+| `g_permaGodMode` | removes death as a variable | safety net for manual testing |
+| `com_captureFrames`, `com_capturePath`, `com_captureTGA`, `com_captureSamples` | built-in frame-capture-to-disk (the devs' own `AutoScreenShotSmokeTest`/`MegaScreenShot` system, per exe strings) | promising lead for a future Phase 2 harness — may be cheaper than a custom D3D staging-texture readback; not yet investigated |
+| `com_skipIntroVideo`, `com_skipPressButtonScreen`, `com_skipSignInManager` | skip startup screens | fast deterministic launch (future harness) |
+| `r_allowTessellation` | confirms a tessellation pipeline exists | see §8 Domain-Shader gap |
+| `r_lod_fovScale` | FOV-dependent LOD bias | revisit once a wide VR FOV is in play |
+
+A full string-scan of the exe (2026-08-20 offline research pass) found
+**~1,982** candidate cvar/command names in total (`g_`/`pm_`/`r_`/`com_`/
+`con_`/`cg_`/`si_`/`in_` prefixes) — the table above is a curated high-value
+subset, not the full list. No stereo/VR strings of any kind were found
+(`stereo3d`/`oculus`/`openvr`/`vive`/`steamvr`/`nvidia3d`/`stereoscopic` all
+zero matches) — confirms there is no hidden/legacy stereo mode to shortcut
+through.
 
 ## 10. Autonomous harness recipe (this game)
-- **Not yet built (Playbook Phase 2 — a priority).** Current constraint: the
-  game pauses when unfocused and rejects external SendInput/SetForegroundWindow,
-  so gameplay captures have needed a human. Planned fix: drive input/camera from
+- **Not yet built (Playbook Phase 2 — deferred, not currently a near-term
+  priority; see the 2026-08-20 ledger ruling: the heavy discovery grind that
+  motivated wanting this is done, only a couple of human check-ins remain to
+  reach the stereo-core milestone).** Current constraint: the game pauses
+  when unfocused and rejects external SendInput/SetForegroundWindow, so
+  gameplay captures have needed a human. Planned fix: drive input/camera from
   *inside* the injected process (hook xinput/dinput polling or the camera update;
   or use `devmapjump` + camera cvars), plus back-buffer capture to disk.
+  **New lead (2026-08-20, unexplored):** the engine has its own built-in
+  frame-capture system (`com_captureFrames`/`com_capturePath`/`com_captureTGA`,
+  backing an internal `AutoScreenShotSmokeTest`/`MegaScreenShot` tool per exe
+  strings) and a `noclip` console command — either could turn out to be
+  cheaper than a from-scratch D3D11 staging-texture readback or an xinput
+  hook, whenever this phase is picked up.
 - Discovery instruments so far (env-gated, off by default): `TEWVR_SEQDUMP`
   (ordered per-draw event stream with ctx tags + command-list events),
   `TEWVR_SEQDUMP_ARMFILE` (file-triggered arm), `TEWVR_SKIPCL` (live skip of
@@ -125,19 +191,58 @@ override mechanism identified; keystone proof and VR runtime still to do.
 ## 11. Dead ends & false leads (save future time)
 - A 384-byte "view matrix" (orthonormal + varying) was actually a **per-object
   cloth model matrix**, not the camera. Content heuristics match per-object
-  matrices too — trust shader reflection, not heuristics.
+  matrices too — trust shader reflection, not heuristics. (2026-08-20: a
+  gameplay capture found 11 distinct 384-byte buffer addresses, consistent
+  with a genuine per-object pool, corroborating this.)
 - The 96-byte most-bound VS slot-0 buffer feeds **lighting**, not geometry.
 - **Uniformly scaling** a view/projection is *visually invisible* (cancels in
   the perspective divide) — perturb **non-uniformly** to see an effect. Stereo's
   horizontal per-eye shift is non-uniform, so it does show.
 - The world buffer "never being written" was a **persistent-map memcpy**, not a
   missing writer — don't assume a bound-but-unmapped buffer is static.
+- **Buffer *size* alone does not identify a buffer's role.** A coincidentally
+  same-sized (1920 B) but functionally unrelated per-frame global buffer
+  exists alongside the true world MVP pool (§7) — told apart by binding slot
+  and context, not size. The same trap likely applies to the other per-frame
+  global sizes found alongside it (656/768/1168/1264/4992/5760/8064 B) — see
+  §7 and the 2026-08-20 offline-research dev-archive note for the full list.
+  Always cross-check *where* (slot, context type) a buffer is bound, not just
+  how big it is.
+- A once-per-frame *batched* staging-copy snapshot of the world-pool buffers
+  (an early Task 6 design) looked safe but was **data-insufficient**: ~1900
+  draws/frame share ~6 buffer identities, so a once-per-frame snapshot gets
+  reused unchanged across ~300 different draws, corrupting all but one.
+  Caught by code review from the diff's own documented constants before ever
+  running — replaced with a direct-pointer-capture-at-creation-time design.
+  Lesson: "safe to execute" and "supplies correct data" are separate claims:
+  check both.
 
 ## 12. Open risks toward the North Star
-- Keystone proof (own the camera on the deferred-recorded world) not yet
-  demonstrated — next up.
+- Keystone proof (own the camera on the deferred-recorded world) — **code
+  landed and reviewed clean (2026-08-20)**, runtime yaw-rotation proof itself
+  still pending a human-witnessed gameplay session.
 - Double-render on a deferred-context engine: re-execute command lists per eye
-  vs. record a second pass — mechanism chosen but unproven at runtime.
-- Persistent-map source read must be made safe (an unhardened probe crashed the
-  game once); AddRef/lifetime + cross-thread handling required before reuse.
-- Post/AA (SMAA, motion vectors) per-eye consistency deferred.
+  vs. record a second pass — mechanism chosen but unproven at runtime. (Task 6
+  and Task 7 are now expected to merge: patch-and-draw-twice-per-original-call
+  at record time, once per eye, rather than re-executing a command list.)
+- Persistent-map source read: the AddRef/lifetime bug is fixed (traced
+  correct on every code path by review); cross-thread safety of the new
+  `CreateBuffer`-hook's foreign `Map` (issued from whatever thread
+  `CreateBuffer` fires on, not necessarily the render thread) is de-risked by
+  a clean live smoke test (16/16 succeeded) but not fully proven — see the
+  2026-08-20 offline-research note for what static evidence could and
+  couldn't establish here.
+- **New (2026-08-20): tessellated/Domain-Shader geometry is invisible to the
+  current patch mechanism.** At least two skinned-mesh vertex shaders never
+  compute `SV_Position` themselves (a Domain Shader does, downstream) — see
+  §8. Expect this geometry not to rotate during the keystone proof; it's an
+  understood gap, not a regression, but will need its own future work
+  (hooking Domain Shader constant buffers) before it's covered.
+- Post/AA (SMAA, motion vectors) per-eye consistency deferred — now fully
+  characterised with exact shader offsets (§8), ready to implement whenever
+  this is picked up.
+- Buffer-identity ambiguity for the `CreateBuffer` candidate pool (§7, §11):
+  resolved analytically via old capture data, but the true ~1920 B world-pool
+  buffers have still never been *observed* captured by the live hook in a
+  real gameplay session (only inferred to be catchable) — first thing for
+  the pending Step 3 session to confirm.
