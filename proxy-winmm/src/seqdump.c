@@ -24,6 +24,17 @@
 #define VTBL_CTX_DRAWINDEXEDINST      20
 #define VTBL_CTX_DRAWINST             21
 #define VTBL_CTX_UPDATESUBRESOURCE    48
+/* ExecuteCommandList / FinishCommandList (Task 5 review addendum 2):
+ * counted directly (0-based) from the llvm-mingw toolchain's own d3d11.h
+ * ID3D11DeviceContextVtbl struct, method-by-method from QueryInterface=0 -
+ * not recomputed by formula, to avoid a miscount. ExecuteCommandList lands
+ * at index 58; FinishCommandList is the LAST method in the whole vtable,
+ * at index 114. Cross-check: this same counting pass also lands
+ * VSSetConstantBuffers at 7 and UpdateSubresource at 48, exactly matching
+ * cbdump.c's/shaderdump.c's already-verified indices for those two -
+ * confirming the count is right before trusting the two new ones. */
+#define VTBL_CTX_EXECUTECOMMANDLIST   58
+#define VTBL_CTX_FINISHCOMMANDLIST    114
 /* ID3D11DeviceContext1 vtable slot for VSSetConstantBuffers1 - given
  * verbatim by the task-5 brief, not recomputed here. */
 #define VTBL_CTX1_VSSETCONSTANTBUFFERS1 120
@@ -47,6 +58,8 @@ typedef void(STDMETHODCALLTYPE *DrawIndexedInst_t)(ID3D11DeviceContext *, UINT, 
 typedef void(STDMETHODCALLTYPE *DrawInst_t)(ID3D11DeviceContext *, UINT, UINT, UINT, UINT);
 typedef void(STDMETHODCALLTYPE *VSSetCB1_t)(ID3D11DeviceContext1 *, UINT, UINT, ID3D11Buffer *const *,
                                              const UINT *, const UINT *);
+typedef HRESULT(STDMETHODCALLTYPE *FinishCommandList_t)(ID3D11DeviceContext *, WINBOOL, ID3D11CommandList **);
+typedef void(STDMETHODCALLTYPE *ExecuteCommandList_t)(ID3D11DeviceContext *, ID3D11CommandList *, WINBOOL);
 
 static Map_t g_map_orig = NULL;
 static Unmap_t g_unmap_orig = NULL;
@@ -58,6 +71,8 @@ static Draw_t g_draw_orig = NULL;
 static DrawIndexedInst_t g_drawindexedinst_orig = NULL;
 static DrawInst_t g_drawinst_orig = NULL;
 static VSSetCB1_t g_vsset_cb1_orig = NULL;
+static FinishCommandList_t g_finishcmdlist_orig = NULL;
+static ExecuteCommandList_t g_executecmdlist_orig = NULL;
 
 static int g_seq_installed = 0;
 static int g_seq_hooks_ok = 0; /* at least one of the hooks above installed + log open */
@@ -201,9 +216,18 @@ static int latch_take_locked(DWORD tid, ID3D11Resource *res, void **out_data, UI
  * Two-phase API so multi-field events (VSSETCB, VSSETCB1) can build their
  * line with several fprintf calls under one lock, while simple one-line
  * events go through seq_line()'s single vfprintf. Both funnel through the
- * same sequence numbering / 40,000-event cap / COMPLETE-line logic. */
+ * same sequence numbering / 40,000-event cap / COMPLETE-line logic.
+ *
+ * Task 5 review addendum 2: every event line now also carries the D3D11
+ * device-context pointer the event fired on (right after tid, before the
+ * event body), so a later analysis pass can tell immediate-context state
+ * calls apart from deferred-context command-list recording on other
+ * threads. `ctx_ptr` is a plain `const void *` (never dereferenced here -
+ * only its address is printed) so callers can pass an
+ * ID3D11DeviceContext*, an ID3D11DeviceContext1*, or NULL (PRESENT has no
+ * natural ctx argument; see seqdump_on_present()) without casting. */
 
-static int seq_begin_locked(void) {
+static int seq_begin_locked(const void *ctx_ptr) {
     if (!seq_active() || g_seq_fp == NULL) {
         return 0;
     }
@@ -213,8 +237,8 @@ static int seq_begin_locked(void) {
         return 0;
     }
     g_seq_seqno++;
-    fprintf(g_seq_fp, "[%llu][tid=%lu] ", (unsigned long long)g_seq_seqno,
-             (unsigned long)GetCurrentThreadId());
+    fprintf(g_seq_fp, "[%llu][tid=%lu][ctx=0x%llX] ", (unsigned long long)g_seq_seqno,
+             (unsigned long)GetCurrentThreadId(), (unsigned long long)(uintptr_t)ctx_ptr);
     return 1; /* still holding g_seq_cs */
 }
 
@@ -233,9 +257,9 @@ static void seq_finish_locked(int flush_now) {
     LeaveCriticalSection(&g_seq_cs);
 }
 
-static void seq_line(int flush_now, const char *fmt, ...) {
+static void seq_line(const void *ctx_ptr, int flush_now, const char *fmt, ...) {
     va_list ap;
-    if (!seq_begin_locked()) {
+    if (!seq_begin_locked(ctx_ptr)) {
         return;
     }
     va_start(ap, fmt);
@@ -258,7 +282,7 @@ static HRESULT STDMETHODCALLTYPE Hook_Map(ID3D11DeviceContext *ctx, ID3D11Resour
             EnterCriticalSection(&g_seq_cs);
             latch_store_locked(tid, res, mapped->pData, bw);
             LeaveCriticalSection(&g_seq_cs);
-            seq_line(0, "MAP res=0x%llX bytewidth=%u maptype=%d",
+            seq_line(ctx, 0, "MAP res=0x%llX bytewidth=%u maptype=%d",
                       (unsigned long long)(uintptr_t)res, bw, (int)mapType);
         }
     }
@@ -284,14 +308,14 @@ static void STDMETHODCALLTYPE Hook_Unmap(ID3D11DeviceContext *ctx, ID3D11Resourc
 
             if (got && data != NULL && latched_bw >= 16) {
                 const float *f = (const float *)data;
-                seq_line(0, "UNMAP res=0x%llX bytewidth=%u floats=[%.4f %.4f %.4f %.4f]",
+                seq_line(ctx, 0, "UNMAP res=0x%llX bytewidth=%u floats=[%.4f %.4f %.4f %.4f]",
                           (unsigned long long)(uintptr_t)res, bw,
                           (double)f[0], (double)f[1], (double)f[2], (double)f[3]);
             } else {
                 /* Latch miss (brief: "if the latch misses, log UNMAP
                  * without floats"), or a mapped CB too small to hold 4
                  * floats. */
-                seq_line(0, "UNMAP res=0x%llX bytewidth=%u floats=<none>",
+                seq_line(ctx, 0, "UNMAP res=0x%llX bytewidth=%u floats=<none>",
                           (unsigned long long)(uintptr_t)res, bw);
             }
         }
@@ -308,11 +332,11 @@ static void STDMETHODCALLTYPE Hook_UpdateSubresource(ID3D11DeviceContext *ctx, I
         if (resource_is_cb_le8192(dst, &bw)) {
             if (bw >= 16) {
                 const float *f = (const float *)src;
-                seq_line(0, "UPDATESUB res=0x%llX bytewidth=%u floats=[%.4f %.4f %.4f %.4f]",
+                seq_line(ctx, 0, "UPDATESUB res=0x%llX bytewidth=%u floats=[%.4f %.4f %.4f %.4f]",
                           (unsigned long long)(uintptr_t)dst, bw,
                           (double)f[0], (double)f[1], (double)f[2], (double)f[3]);
             } else {
-                seq_line(0, "UPDATESUB res=0x%llX bytewidth=%u floats=<none>",
+                seq_line(ctx, 0, "UPDATESUB res=0x%llX bytewidth=%u floats=<none>",
                           (unsigned long long)(uintptr_t)dst, bw);
             }
         }
@@ -323,7 +347,7 @@ static void STDMETHODCALLTYPE Hook_UpdateSubresource(ID3D11DeviceContext *ctx, I
 
 static void STDMETHODCALLTYPE Hook_VSSetCB(ID3D11DeviceContext *ctx, UINT startSlot, UINT numBuffers,
                                             ID3D11Buffer *const *ppCB) {
-    if (ppCB != NULL && seq_begin_locked()) {
+    if (ppCB != NULL && seq_begin_locked(ctx)) {
         UINT n = (numBuffers > 4) ? 4 : numBuffers;
         UINT i;
         fprintf(g_seq_fp, "VSSETCB start=%u num=%u", startSlot, numBuffers);
@@ -348,10 +372,10 @@ static void STDMETHODCALLTYPE Hook_VSSetShader(ID3D11DeviceContext *ctx, ID3D11V
     if (seq_active()) {
         uint64_t hash = shaderdump_hash_for_shader(vs);
         if (hash != 0) {
-            seq_line(0, "VSSETSHADER ptr=0x%llX hash=%016llX",
+            seq_line(ctx, 0, "VSSETSHADER ptr=0x%llX hash=%016llX",
                       (unsigned long long)(uintptr_t)vs, (unsigned long long)hash);
         } else {
-            seq_line(0, "VSSETSHADER ptr=0x%llX hash=?", (unsigned long long)(uintptr_t)vs);
+            seq_line(ctx, 0, "VSSETSHADER ptr=0x%llX hash=?", (unsigned long long)(uintptr_t)vs);
         }
     }
 
@@ -361,14 +385,14 @@ static void STDMETHODCALLTYPE Hook_VSSetShader(ID3D11DeviceContext *ctx, ID3D11V
 static void STDMETHODCALLTYPE Hook_DrawIndexed(ID3D11DeviceContext *ctx, UINT idxCount, UINT startIdx,
                                                 INT baseVtx) {
     if (seq_active()) {
-        seq_line(0, "DRAW variant=DrawIndexed count=%u", idxCount);
+        seq_line(ctx, 0, "DRAW variant=DrawIndexed count=%u", idxCount);
     }
     g_drawindexed_orig(ctx, idxCount, startIdx, baseVtx);
 }
 
 static void STDMETHODCALLTYPE Hook_Draw(ID3D11DeviceContext *ctx, UINT vtxCount, UINT startVtx) {
     if (seq_active()) {
-        seq_line(0, "DRAW variant=Draw count=%u", vtxCount);
+        seq_line(ctx, 0, "DRAW variant=Draw count=%u", vtxCount);
     }
     g_draw_orig(ctx, vtxCount, startVtx);
 }
@@ -377,7 +401,7 @@ static void STDMETHODCALLTYPE Hook_DrawIndexedInst(ID3D11DeviceContext *ctx, UIN
                                                     UINT instCount, UINT startIdx, INT baseVtx,
                                                     UINT startInst) {
     if (seq_active()) {
-        seq_line(0, "DRAW variant=DrawIndexedInstanced count=%u instances=%u", idxPerInst, instCount);
+        seq_line(ctx, 0, "DRAW variant=DrawIndexedInstanced count=%u instances=%u", idxPerInst, instCount);
     }
     g_drawindexedinst_orig(ctx, idxPerInst, instCount, startIdx, baseVtx, startInst);
 }
@@ -385,7 +409,7 @@ static void STDMETHODCALLTYPE Hook_DrawIndexedInst(ID3D11DeviceContext *ctx, UIN
 static void STDMETHODCALLTYPE Hook_DrawInst(ID3D11DeviceContext *ctx, UINT vtxPerInst, UINT instCount,
                                              UINT startVtx, UINT startInst) {
     if (seq_active()) {
-        seq_line(0, "DRAW variant=DrawInstanced count=%u instances=%u", vtxPerInst, instCount);
+        seq_line(ctx, 0, "DRAW variant=DrawInstanced count=%u instances=%u", vtxPerInst, instCount);
     }
     g_drawinst_orig(ctx, vtxPerInst, instCount, startVtx, startInst);
 }
@@ -393,7 +417,7 @@ static void STDMETHODCALLTYPE Hook_DrawInst(ID3D11DeviceContext *ctx, UINT vtxPe
 static void STDMETHODCALLTYPE Hook_VSSetCB1(ID3D11DeviceContext1 *ctx, UINT startSlot, UINT numBuffers,
                                              ID3D11Buffer *const *ppCB, const UINT *pFirstConstant,
                                              const UINT *pNumConstants) {
-    if (ppCB != NULL && seq_begin_locked()) {
+    if (ppCB != NULL && seq_begin_locked(ctx)) {
         UINT n = (numBuffers > 4) ? 4 : numBuffers;
         UINT i;
         fprintf(g_seq_fp, "VSSETCB1 start=%u num=%u", startSlot, numBuffers);
@@ -414,6 +438,37 @@ static void STDMETHODCALLTYPE Hook_VSSetCB1(ID3D11DeviceContext1 *ctx, UINT star
     }
 
     g_vsset_cb1_orig(ctx, startSlot, numBuffers, ppCB, pFirstConstant, pNumConstants);
+}
+
+/* Task 5 review addendum 2: the gameplay capture showed draws arriving
+ * from six distinct threads while every state-setting event (VSSETSHADER/
+ * VSSETCB/MAP) stayed on the render thread - strongly suggesting deferred
+ * contexts recording command lists on worker threads, then submitted via
+ * ExecuteCommandList on the immediate context. These two hooks (plus the
+ * ctx= field now on every event line) let a later analysis pass confirm
+ * or refute that directly from seqdump.log, without guessing from thread
+ * ids alone. */
+static HRESULT STDMETHODCALLTYPE Hook_FinishCommandList(ID3D11DeviceContext *ctx,
+                                                          WINBOOL restoreDeferredContextState,
+                                                          ID3D11CommandList **ppCommandList) {
+    HRESULT hr = g_finishcmdlist_orig(ctx, restoreDeferredContextState, ppCommandList);
+    if (seq_active()) {
+        ID3D11CommandList *cl = (ppCommandList != NULL) ? *ppCommandList : NULL;
+        seq_line(ctx, 0, "FINISHCMDLIST restore=%d hr=0x%08lX cmdlist=0x%llX",
+                  (int)restoreDeferredContextState, (unsigned long)hr,
+                  (unsigned long long)(uintptr_t)cl);
+    }
+    return hr;
+}
+
+static void STDMETHODCALLTYPE Hook_ExecuteCommandList(ID3D11DeviceContext *ctx,
+                                                        ID3D11CommandList *commandList,
+                                                        WINBOOL restoreContextState) {
+    if (seq_active()) {
+        seq_line(ctx, 0, "EXECUTECMDLIST cmdlist=0x%llX restore=%d",
+                  (unsigned long long)(uintptr_t)commandList, (int)restoreContextState);
+    }
+    g_executecmdlist_orig(ctx, commandList, restoreContextState);
 }
 
 /* ---- Present-driven arming (called from hooks.c's Hook_Present) ---- */
@@ -494,7 +549,16 @@ void seqdump_on_present(UINT64 frame_number) {
         }
     }
 
-    seq_line(1 /* flush at Present boundaries */, "PRESENT frame=%llu", (unsigned long long)frame_number);
+    /* Present takes no ID3D11DeviceContext argument (it's an
+     * IDXGISwapChain method), so there is no natural ctx= value here. Use
+     * the real captured immediate context if available - genuinely useful
+     * (it's the context Present implicitly flushes/relates to) and keeps
+     * the ctx= field's meaning consistent rather than leaving it blank;
+     * NULL (printed as ctx=0x0) if the real context hasn't been captured
+     * yet (should not happen once armed, since arming only ever occurs
+     * well after the first Present, but stay fail-safe regardless). */
+    seq_line(d3d_capture_ready() ? (const void *)g_d3d.ctx : NULL,
+              1 /* flush at Present boundaries */, "PRESENT frame=%llu", (unsigned long long)frame_number);
 }
 
 /* ---- setup / teardown ---- */
@@ -527,6 +591,7 @@ void seqdump_install(ID3D11DeviceContext *dummy_ctx) {
     DWORD len;
     void **vtbl;
     int ok_map, ok_unmap, ok_update, ok_vscb, ok_vsset, ok_di, ok_d, ok_dii, ok_dinst;
+    int ok_finishcl, ok_executecl;
     int ok_vscb1 = 0;
 
     if (g_seq_installed) {
@@ -586,6 +651,12 @@ void seqdump_install(ID3D11DeviceContext *dummy_ctx) {
                                         "seqdump ID3D11DeviceContext::DrawIndexedInstanced");
     ok_dinst = mh_glue_create_and_enable(vtbl[VTBL_CTX_DRAWINST], (void *)&Hook_DrawInst,
                                           (void **)&g_drawinst_orig, "seqdump ID3D11DeviceContext::DrawInstanced");
+    ok_finishcl = mh_glue_create_and_enable(vtbl[VTBL_CTX_FINISHCOMMANDLIST], (void *)&Hook_FinishCommandList,
+                                             (void **)&g_finishcmdlist_orig,
+                                             "seqdump ID3D11DeviceContext::FinishCommandList");
+    ok_executecl = mh_glue_create_and_enable(vtbl[VTBL_CTX_EXECUTECOMMANDLIST], (void *)&Hook_ExecuteCommandList,
+                                              (void **)&g_executecmdlist_orig,
+                                              "seqdump ID3D11DeviceContext::ExecuteCommandList");
 
     {
         /* Brief: "if the context supports ID3D11DeviceContext1 ... hook or
@@ -614,20 +685,22 @@ void seqdump_install(ID3D11DeviceContext *dummy_ctx) {
     }
 
     g_seq_hooks_ok = ok_map || ok_unmap || ok_update || ok_vscb || ok_vsset ||
-                     ok_di || ok_d || ok_dii || ok_dinst;
+                     ok_di || ok_d || ok_dii || ok_dinst || ok_finishcl || ok_executecl;
 
     log_msg("seqdump: hooks map=%d unmap=%d update=%d vscb=%d vsset=%d di=%d d=%d dii=%d dinst=%d "
-             "vscb1=%d -> %s (arm=%s, caps at %d events)",
+             "vscb1=%d finishcl=%d executecl=%d -> %s (arm=%s, caps at %d events)",
              ok_map, ok_unmap, ok_update, ok_vscb, ok_vsset, ok_di, ok_d, ok_dii, ok_dinst, ok_vscb1,
+             ok_finishcl, ok_executecl,
              g_seq_hooks_ok ? "ACTIVE" : "inactive",
              g_seq_armfile_mode ? "seqarm.txt file-trigger" : "frame-301 auto",
              SEQDUMP_MAX_EVENTS);
 
     if (g_seq_hooks_ok && g_seq_fp != NULL) {
         fprintf(g_seq_fp, "TEWVR seqdump session start (TEWVR_SEQDUMP=1%s); hooks: map=%d unmap=%d "
-                 "update=%d vscb=%d vsset=%d di=%d d=%d dii=%d dinst=%d vscb1=%d\n",
+                 "update=%d vscb=%d vsset=%d di=%d d=%d dii=%d dinst=%d vscb1=%d finishcl=%d executecl=%d\n",
                  g_seq_armfile_mode ? ", TEWVR_SEQDUMP_ARMFILE=1 (arm via seqarm.txt)" : "",
-                 ok_map, ok_unmap, ok_update, ok_vscb, ok_vsset, ok_di, ok_d, ok_dii, ok_dinst, ok_vscb1);
+                 ok_map, ok_unmap, ok_update, ok_vscb, ok_vsset, ok_di, ok_d, ok_dii, ok_dinst, ok_vscb1,
+                 ok_finishcl, ok_executecl);
         fflush(g_seq_fp);
     }
 }
