@@ -1,6 +1,20 @@
 # Status
 
-**Last updated: 2026-08-20 (session 4) — Task 5 SOLVED: we know how to make the game draw a second eye, and we proved what the frame is made of.**
+**Last updated: 2026-08-20 (session 4) — Task 6 discovery SOLVED: we found where the world's position matrix lives, and it's readable right when we need it.**
+
+The last mystery is gone. Each object's position matrix lives in a small set of
+buffers (six of them) that the game keeps permanently open and pokes new numbers
+into directly — which is why we never caught it "writing" them. By reading those
+buffers at the moment each object draws, we confirmed we can see every object's
+matrix exactly when we'd want to change it. That unblocks stereo: for each eye,
+read the matrix, nudge it by that eye's offset, hand back our copy, draw. Full
+story in [08-finding-the-worlds-matrix.md](08-finding-the-worlds-matrix.md).
+Next: build that interception and prove it by making the whole world turn on
+command. (Also this session — **Task 5 SOLVED**: the second eye comes from
+replaying the recorded command lists per eye; see
+[07-how-the-frame-is-drawn.md](07-how-the-frame-is-drawn.md).)
+
+**Earlier this session — Task 5:**
 
 We taught the proxy to log the game's draw commands in order and discovered the
 game draws each frame on **six threads at once**, recording lists of commands
