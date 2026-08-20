@@ -1,17 +1,25 @@
 # Status
 
-**Last updated: 2026-08-19 (later session) — Task 4 SOLVED: we found how the world gets its position, by reading the shaders.**
+**Last updated: 2026-08-20 (session 4) — Task 5 SOLVED: we know how to make the game draw a second eye, and we proved what the frame is made of.**
 
-The camera hunt is over. We dumped and disassembled the game's vertex shaders
-and read the answer straight out of the bytecode: every object is drawn with its
-own finished model-view-projection matrix, handed to the shader in a per-draw
-constant block under the name `mvpmatrix` (id Tech 5's parameter system, still
-alive inside Tango's engine). Better still, the maths collapses beautifully: a
-single fixed per-eye matrix multiplied onto every per-draw matrix gives a
-correct stereo eye view — no per-object understanding needed. The "harder engine
-class" from the last note has a one-matrix master key. Full story in
-[06c-reading-the-shaders.md](06c-reading-the-shaders.md). Next: find the right
-interception moment for that multiply, then render each frame twice — stereo.
+We taught the proxy to log the game's draw commands in order and discovered the
+game draws each frame on **six threads at once**, recording lists of commands
+that a seventh thread plays back. To learn what those lists contain, we added a
+switch to skip playing them and flipped it on for a few seconds mid-game: **the
+world went black** — all the scenery and Sebastian's body disappeared, leaving
+only his hair and the windows and lights. So the six threads record the world;
+the main thread only draws the extras. That decides the stereo plan: to get the
+world into both eyes we **play those recorded lists back a second time, once per
+eye**, each into its own half of the screen with that eye's master matrix. Full
+story in [07-how-the-frame-is-drawn.md](07-how-the-frame-is-drawn.md). One detail
+remains for the next stage — whether a second playback picks up fresh camera
+numbers or the recorded ones — but the method is settled.
+
+The earlier win still stands (Task 4): every object is drawn with its own
+finished model-view-projection matrix (`mvpmatrix`, id Tech 5's parameter
+system), and one fixed per-eye matrix multiplied onto every object's matrix gives
+a correct eye view — no per-object understanding needed. Full story in
+[06c-reading-the-shaders.md](06c-reading-the-shaders.md).
 
 ---
 
