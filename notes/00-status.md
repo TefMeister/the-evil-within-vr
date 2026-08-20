@@ -1,7 +1,23 @@
 # The Evil Within VR — Status
 
-Last updated: 2026-08-19 (session 3: **TASK 4 RESOLVED** — the world-geometry
-transform is found, by vertex-shader disassembly). Every material vertex shader
+Last updated: 2026-08-20 (session 4: **TASK 5 RESOLVED** — the double-render
+strategy is decided, on the strength of a live experiment). The engine records
+each frame on **six deferred contexts across six worker threads**, and the
+immediate context replays those command lists (~200–300 `ExecuteCommandList`
+per frame). A live "skip the command lists" toggle proved what they contain:
+with playback skipped, the world went black — all scenery and Sebastian's body
+vanished, leaving only his hair, plus windows and lights. So the deferred lists
+carry the bulk of the frame (≈7× the immediate path's index volume); the
+immediate context draws only hair, emissive/lights, and HUD/post. **Decision:**
+produce the second eye by **re-executing the recorded command lists once per
+eye**, into each half of the back-buffer, with the per-eye `K_eye` applied — the
+only mechanism that reaches the deferred-recorded world geometry. Full write-up
+in [notes/07-double-render-strategy.md](07-double-render-strategy.md); the one
+open crux (does a second `ExecuteCommandList` re-read current constants?) is
+handed to Task 7. Instrumentation (`seqdump.c`, `mvptable.c`) is in the mod repo,
+env-var-gated and off by default.
+
+Task 4 (session 3) established the per-eye maths: every material vertex shader
 receives a per-draw slot-0 cbuffer (`constantBufferV`) whose reflection data
 names the engine parameters, including the four rows of the finished
 model-view-projection matrix (`mvpmatrixx/y/z/w`); `SV_Position` is four `dp4`s
@@ -10,10 +26,8 @@ shaders consume them; the rest are post-process/depth-only. Crucially, stereo
 needs **no per-object knowledge**: a constant per-eye left-multiply
 `K_eye = P_eye * T_eye * P^-1` applied to every per-draw MVP yields the eye
 view. Full write-up in
-[notes/06c-shader-disassembly-mvp-found.md](06c-shader-disassembly-mvp-found.md);
-instrumentation (`shaderdump.c` + `tools/dxbc_disasm.c`) is in the mod repo.
-**Next:** pin down the per-draw fill→bind→draw ordering to choose the patch
-point, then Task 5 (double-render strategy). The earlier session-2 findings
+[notes/06c-shader-disassembly-mvp-found.md](06c-shader-disassembly-mvp-found.md).
+The earlier session-2 findings
 stand: the 384-byte "view matrix" was a per-object cloth matrix, and the shared
 per-frame buffers are screen-space only (96 bytes = lighting, 64 = colour
 grading, 128 = lighting) — see
