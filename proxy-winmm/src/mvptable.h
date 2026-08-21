@@ -79,3 +79,35 @@ int mvp_offset_for_shader(const void *vs_ptr);
  * mvpx_offset, or was not confirmed contiguous. See mvptable.c's own
  * comment above this function for the discovery finding that motivated it. */
 int mvp_row_offsets_for_shader(const void *vs_ptr, int row_offsets[4]);
+
+/* Task 6 fix round 3: DIAGNOSTIC-ONLY classification of why
+ * mvp_row_offsets_for_shader() would refuse a given shader - added because
+ * a real gameplay session showed mvp_patch's per-draw patch never firing
+ * at all, with no visibility into which of several possible reasons was
+ * responsible. mvp_row_offsets_for_shader() itself is unchanged (still the
+ * function the real patch path calls); this exists purely so mvp_patch.c's
+ * rate-limited skip-reason counters can report WHY, not just THAT, a
+ * shader was refused. Not on any hot path by itself - mvp_patch.c only
+ * calls this in the (already-failing) branch where
+ * mvp_row_offsets_for_shader() just returned 0, so it costs one extra
+ * table lookup only for draws that were already being skipped. */
+enum MvpShaderStatus {
+    MVP_SHADER_UNKNOWN = 0,       /* untracked: hash lookup failed, or this
+                                      exact shader was never reflected */
+    MVP_SHADER_NO_MVP = 1,        /* known, but this shader has no
+                                      mvpmatrix at all (mvpx_offset == -1) -
+                                      expected for post-process/depth-only
+                                      shaders, per Task 4's finding */
+    MVP_SHADER_NONCONTIGUOUS = 2, /* known, has an mvpx_offset, but y/z/w
+                                      were not confirmed contiguous - the
+                                      same refusal mvp_row_offsets_for_shader()
+                                      already makes */
+    MVP_SHADER_OK = 3             /* known, offsets safe to use - matches
+                                      mvp_row_offsets_for_shader()'s success
+                                      case; should not normally reach the
+                                      diagnostic caller, which only calls
+                                      this after mvp_row_offsets_for_shader()
+                                      has already failed */
+};
+
+enum MvpShaderStatus mvp_shader_status_for_shader(const void *vs_ptr);

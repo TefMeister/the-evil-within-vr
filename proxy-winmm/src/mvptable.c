@@ -380,3 +380,33 @@ int mvp_row_offsets_for_shader(const void *vs_ptr, int row_offsets[4]) {
 
     return ok;
 }
+
+enum MvpShaderStatus mvp_shader_status_for_shader(const void *vs_ptr) {
+    uint64_t hash;
+    struct MvpEntry *e;
+    enum MvpShaderStatus status;
+
+    if (!g_mvp_cs_ready || vs_ptr == NULL) {
+        return MVP_SHADER_UNKNOWN;
+    }
+
+    hash = shaderdump_hash_for_shader(vs_ptr);
+    if (hash == 0) {
+        return MVP_SHADER_UNKNOWN;
+    }
+
+    EnterCriticalSection(&g_mvp_cs);
+    e = mvp_find_locked(hash);
+    if (e == NULL) {
+        status = MVP_SHADER_UNKNOWN;
+    } else if (e->mvpx_offset < 0) {
+        status = MVP_SHADER_NO_MVP;
+    } else if (!e->contiguous) {
+        status = MVP_SHADER_NONCONTIGUOUS;
+    } else {
+        status = MVP_SHADER_OK;
+    }
+    LeaveCriticalSection(&g_mvp_cs);
+
+    return status;
+}

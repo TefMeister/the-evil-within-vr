@@ -217,6 +217,100 @@ static int mvp_rate_limit_should_fire(volatile LONG *counter) {
 static volatile LONG g_map_fail_log_count = 0;
 static volatile LONG g_offset_oob_log_count = 0;
 
+/* ---- per-draw skip-reason diagnostics (Task 6 fix round 3) ----
+ * Added after a real gameplay session (TEWVR_TEST_YAW=90, correct
+ * candidate buffers now captured per fix round 2's filter fix) still never
+ * fired `mvp_patch: scratch pool ready` even once - i.e. no draw was ever
+ * actually patched, with zero visibility into why. mvp_patch_prepare() is
+ * a genuine hot path (~1900 calls/frame across ~7 threads), so this is a
+ * counter-and-periodic-summary design, NOT per-occurrence logging: every
+ * exit point in mvp_patch_prepare() increments exactly one
+ * InterlockedIncrement'd counter (cheap, lock-free), and
+ * mvp_diag_maybe_report() - called once per mvp_patch_prepare() invocation
+ * - does a cheap elapsed-time check and only actually reads/resets/logs
+ * the counters at most once every MVP_DIAG_REPORT_INTERVAL_MS, gated so
+ * only one thread ever performs a given report (InterlockedCompareExchange
+ * gate) even though many threads call this every draw. Diagnostic-only:
+ * removing this whole block would not change patch behaviour at all, only
+ * observability. */
+#define MVP_DIAG_REPORT_INTERVAL_MS 5000
+
+static volatile LONG g_diag_not_installed = 0;      /* exit: !g_installed (should be ~0 during real play) */
+static volatile LONG g_diag_no_vs = 0;               /* exit: VSGetShader returned NULL */
+static volatile LONG g_diag_shader_unknown = 0;      /* exit: shader untracked by mvptable at all */
+static volatile LONG g_diag_shader_no_mvp = 0;       /* exit: shader known, has no mvpmatrix at all (expected for post/depth-only shaders) */
+static volatile LONG g_diag_shader_noncontig = 0;    /* exit: shader known, has mvpx, but rows not confirmed contiguous */
+static volatile LONG g_diag_no_slot0_buf = 0;        /* exit: nothing bound at VS slot 0 */
+static volatile LONG g_diag_pool_miss = 0;           /* exit: bound slot0 buffer is not in the direct-map pool - THE key counter for this round's mystery */
+static volatile LONG g_diag_bounds_fail = 0;         /* exit: Important #4's bounds check failed (also has its own immediate rate-limited log) */
+static volatile LONG g_diag_scratch_not_ready = 0;   /* exit: lazy scratch-pool init not (yet) successful */
+static volatile LONG g_diag_scratch_alloc_fail = 0;  /* exit: per-thread scratch index/buffer unavailable */
+static volatile LONG g_diag_scratch_map_fail = 0;    /* exit: scratch Map(WRITE_DISCARD) failed (also has its own immediate rate-limited log) */
+static volatile LONG g_diag_patched = 0;             /* success: a draw was actually patched */
+
+static volatile LONG g_pool_miss_first_logged = 0; /* sticky one-shot gate for the detailed first-miss log */
+static volatile LONG g_diag_report_gate = 0;       /* ensures only one thread performs a given periodic report */
+static ULONGLONG g_diag_last_report_ms = 0;        /* only ever touched by whichever thread currently holds g_diag_report_gate */
+
+/* Cheap on every call (one InterlockedCompareExchange, and - in the
+ * overwhelming majority of calls - one GetTickCount64 + comparison, then
+ * done); only the one call per MVP_DIAG_REPORT_INTERVAL_MS that actually
+ * wins the time check does the (still cheap - 12 InterlockedExchange
+ * snapshot-and-reset ops plus one log_msg) reporting work. Snapshot-and-
+ * RESET (InterlockedExchange, not a plain read) means a concurrent
+ * increment from another thread mid-report is never lost, only deferred
+ * to the next report - each individual counter's read+reset is atomic;
+ * only the reported COUNTS' relative timing across different counters is
+ * approximate, which is immaterial for a periodic diagnostic summary. */
+static void mvp_diag_maybe_report(void) {
+    ULONGLONG now;
+    LONG not_installed, no_vs, shader_unknown, shader_no_mvp, shader_noncontig,
+        no_slot0_buf, pool_miss, bounds_fail, scratch_not_ready, scratch_alloc_fail,
+        scratch_map_fail, patched;
+
+    if (InterlockedCompareExchange(&g_diag_report_gate, 1, 0) != 0) {
+        return; /* another thread is already inside this function right now */
+    }
+
+    now = GetTickCount64();
+    if (now - g_diag_last_report_ms < MVP_DIAG_REPORT_INTERVAL_MS) {
+        InterlockedExchange(&g_diag_report_gate, 0);
+        return;
+    }
+    g_diag_last_report_ms = now;
+
+    not_installed = InterlockedExchange(&g_diag_not_installed, 0);
+    no_vs = InterlockedExchange(&g_diag_no_vs, 0);
+    shader_unknown = InterlockedExchange(&g_diag_shader_unknown, 0);
+    shader_no_mvp = InterlockedExchange(&g_diag_shader_no_mvp, 0);
+    shader_noncontig = InterlockedExchange(&g_diag_shader_noncontig, 0);
+    no_slot0_buf = InterlockedExchange(&g_diag_no_slot0_buf, 0);
+    pool_miss = InterlockedExchange(&g_diag_pool_miss, 0);
+    bounds_fail = InterlockedExchange(&g_diag_bounds_fail, 0);
+    scratch_not_ready = InterlockedExchange(&g_diag_scratch_not_ready, 0);
+    scratch_alloc_fail = InterlockedExchange(&g_diag_scratch_alloc_fail, 0);
+    scratch_map_fail = InterlockedExchange(&g_diag_scratch_map_fail, 0);
+    patched = InterlockedExchange(&g_diag_patched, 0);
+
+    InterlockedExchange(&g_diag_report_gate, 0);
+
+    if (not_installed || no_vs || shader_unknown || shader_no_mvp || shader_noncontig ||
+        no_slot0_buf || pool_miss || bounds_fail || scratch_not_ready || scratch_alloc_fail ||
+        scratch_map_fail || patched) {
+        log_msg("mvp_patch: DIAG last ~%dms: patched=%ld | skipped: not_installed=%ld no_vs=%ld "
+                 "shader_unknown=%ld shader_no_mvp=%ld shader_noncontig=%ld no_slot0_buf=%ld "
+                 "pool_miss=%ld bounds_fail=%ld scratch_not_ready=%ld scratch_alloc_fail=%ld "
+                 "scratch_map_fail=%ld",
+                 MVP_DIAG_REPORT_INTERVAL_MS, patched, not_installed, no_vs, shader_unknown,
+                 shader_no_mvp, shader_noncontig, no_slot0_buf, pool_miss, bounds_fail,
+                 scratch_not_ready, scratch_alloc_fail, scratch_map_fail);
+    }
+    /* Deliberately silent if EVERY counter is 0 (e.g. at the menu, before
+     * any draw reaches mvp_patch_prepare() at all, or between reports with
+     * genuinely zero activity) - matches this module's existing
+     * quiet-unless-something-happened logging style. */
+}
+
 /* ---- install-time hook bookkeeping ---- */
 
 #define MVP_MAX_HOOKED_FUNCS 4
@@ -510,7 +604,13 @@ static int ensure_scratch_ready(ID3D11Device *dev) {
  * Never blocks, retries, or delays the draw itself; never partially
  * applies a patch (VSSetConstantBuffers to the scratch buffer is the LAST
  * thing this function does, only after every prior step already
- * succeeded). */
+ * succeeded).
+ *
+ * Task 6 fix round 3: every exit point below increments exactly one
+ * diagnostic counter (see the block above hook_one()) - purely for
+ * observability, no behaviour change. mvp_diag_maybe_report() is called
+ * once, unconditionally, near the top, so it runs regardless of which exit
+ * this particular call takes. */
 static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_buf) {
     ID3D11VertexShader *vs = NULL;
     ID3D11Buffer *buf = NULL;
@@ -527,15 +627,36 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
 
     *out_orig_buf = NULL;
 
+    mvp_diag_maybe_report();
+
     if (!g_installed) {
+        InterlockedIncrement(&g_diag_not_installed);
         return 0;
     }
 
     ID3D11DeviceContext_VSGetShader(ctx, &vs, NULL, NULL);
     if (vs == NULL) {
+        InterlockedIncrement(&g_diag_no_vs);
         return 0;
     }
     if (!mvp_row_offsets_for_shader(vs, offs)) {
+        /* Diagnostic-only second lookup, only on this (already-failing)
+         * path, to classify WHY - see mvptable.h's MvpShaderStatus. */
+        switch (mvp_shader_status_for_shader(vs)) {
+            case MVP_SHADER_NO_MVP:
+                InterlockedIncrement(&g_diag_shader_no_mvp);
+                break;
+            case MVP_SHADER_NONCONTIGUOUS:
+                InterlockedIncrement(&g_diag_shader_noncontig);
+                break;
+            case MVP_SHADER_UNKNOWN:
+            case MVP_SHADER_OK: /* shouldn't happen here (mvp_row_offsets_for_shader
+                                    would have succeeded), but count it as
+                                    "unknown" rather than silently drop it */
+            default:
+                InterlockedIncrement(&g_diag_shader_unknown);
+                break;
+        }
         ID3D11VertexShader_Release(vs);
         return 0; /* unknown shader, or non-contiguous rows we refuse to guess at */
     }
@@ -543,6 +664,7 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
 
     ID3D11DeviceContext_VSGetConstantBuffers(ctx, 0, 1, &buf);
     if (buf == NULL) {
+        InterlockedIncrement(&g_diag_no_slot0_buf);
         return 0; /* nothing bound at slot 0 */
     }
 
@@ -551,7 +673,25 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
         /* Not one of the persistently-mapped world cb0 buffers (e.g. a
          * small immediate-context cb0 - this mechanism intentionally does
          * not cover those, only the deferred world draws). Fail-safe skip,
-         * same posture as an unknown shader. */
+         * same posture as an unknown shader. THE key counter for this
+         * round's mystery: if this is the dominant skip reason during real
+         * gameplay, the shader IS known/patchable but its bound buffer is
+         * something other than what CreateBuffer captured - logged once,
+         * in full, the first time it happens, so a re-round-trip isn't
+         * needed to see what that buffer actually looks like. */
+        InterlockedIncrement(&g_diag_pool_miss);
+        if (InterlockedCompareExchange(&g_pool_miss_first_logged, 1, 0) == 0) {
+            D3D11_BUFFER_DESC bd;
+            memset(&bd, 0, sizeof(bd));
+            ID3D11Buffer_GetDesc(buf, &bd);
+            log_msg("mvp_patch: DIAG first pool-miss: a KNOWN/patchable shader's bound slot0 "
+                     "buf=%p is NOT in the direct-map pool (pool currently holds %d identities). "
+                     "That buffer's real desc: ByteWidth=%u Usage=%d BindFlags=0x%X "
+                     "CPUAccessFlags=0x%X MiscFlags=0x%X - compare against the [%d,%d]-byte "
+                     "DYNAMIC/CONSTANT_BUFFER/CPU_ACCESS_WRITE filter Hook_CreateBuffer applies",
+                     (void *)buf, g_direct_pool_count, bd.ByteWidth, (int)bd.Usage, bd.BindFlags,
+                     bd.CPUAccessFlags, bd.MiscFlags, MVP_POOL_BUF_MIN_BYTES, MVP_POOL_BUF_MAX_BYTES);
+        }
         ID3D11Buffer_Release(buf);
         return 0;
     }
@@ -564,6 +704,7 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
      * have applied a confidently-wrong, zero-filled "patch" instead of
      * skipping - the one path that violated the fail-safe requirement). */
     if (offs[0] < 0 || (UINT)(offs[3] + 16) > byte_width || (UINT)(offs[3] + 16) > MVP_CB_BYTES) {
+        InterlockedIncrement(&g_diag_bounds_fail);
         ID3D11Buffer_Release(buf);
         if (mvp_rate_limit_should_fire(&g_offset_oob_log_count)) {
             log_msg("mvp_patch: shader's reflected mvp row offsets (last row ends at byte %d) exceed "
@@ -623,18 +764,21 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
         }
         LeaveCriticalSection(&g_scratch_init_cs);
         if (!g_scratch_ready) {
+            InterlockedIncrement(&g_diag_scratch_not_ready);
             return 0;
         }
     }
 
     scratch_index = mvp_alloc_scratch_index();
     if (scratch_index < 0 || g_scratch[scratch_index] == NULL) {
+        InterlockedIncrement(&g_diag_scratch_alloc_fail);
         return 0;
     }
 
     hr = ID3D11DeviceContext_Map(ctx, (ID3D11Resource *)g_scratch[scratch_index], 0,
                                  D3D11_MAP_WRITE_DISCARD, 0, &mapped);
     if (FAILED(hr) || mapped.pData == NULL) {
+        InterlockedIncrement(&g_diag_scratch_map_fail);
         if (mvp_rate_limit_should_fire(&g_map_fail_log_count)) {
             log_msg("mvp_patch: scratch Map(WRITE_DISCARD) failed (hr=0x%08lX); draw falls through unpatched",
                      (unsigned long)hr);
@@ -648,6 +792,7 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
 
     *out_orig_buf = buf; /* identity only, for the post-draw rebind - the direct pool (and the
                              engine's own binding) keep the underlying object alive independently */
+    InterlockedIncrement(&g_diag_patched);
     return 1;
 }
 
