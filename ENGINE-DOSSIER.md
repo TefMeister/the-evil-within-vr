@@ -4,14 +4,16 @@
 > `PLAYBOOK.md` phases. Blow-by-blow history lives in the `-dev-archive` and
 > `-modding-notes` repos; this is the consolidated reference.
 
-**Status:** Phase 3→4 (engine model built; keystone camera-override *code*
-landed and reviewed clean 2026-08-20, runtime proof itself still pending a
-human-witnessed session). **VR-readiness verdict:** **feasible** — camera
-transform fully located, override mechanism identified, implemented, and
-statically de-risked by an offline research pass (2026-08-20: buffer-identity
-ambiguity resolved, SMAA/motion-vector shader fully characterised, a
-tessellation/Domain-Shader gap identified for future work — see dev-archive
-`notes/09-offline-research.md`); keystone proof and VR runtime still to do.
+**Status:** *** Phase 4 COMPLETE (2026-08-21) — the keystone proof is passed.
+*** The mod owns and can rewrite the world's per-draw camera transform on
+real, deferred-recorded, in-game geometry, proven with a falsifiable visual
+test (see §7, §12, and dev-archive `notes/10-keystone-proof-task6-resolved.md`
+for the full account, including three false-start mechanisms that live
+gameplay testing disproved before the real one was found). **VR-readiness
+verdict: feasible, keystone risk retired.** Phase 5 (stereo on the flat
+monitor) is next; real per-eye maths, a ~74–77% draw-coverage gap, and a
+writer-concurrency risk (measured safe so far, not structurally guaranteed)
+carry forward — see §12.
 
 ## 1. Identity
 - The Evil Within (2014), PC (Steam, app id 268050). 64-bit, ~38 MB exe.
@@ -75,35 +77,53 @@ tessellation/Domain-Shader gap identified for future work — see dev-archive
   per-object knowledge. `P` from `g_fov` + aspect (or a shader receiving
   `projectionmatrixz`).
 
-## 7. Constant-buffer fill mechanism
-- The world's per-object MVP lives in a **small pool of ~6 persistently-mapped
-  1920-byte constant buffers** (one ring per worker thread), bound to VS slot 0.
-- The engine writes them by **CPU memcpy into the persistent mapping** — **no
-  per-draw `Map`/`Unmap`/`UpdateSubresource`**, so Map hooks never see the
-  writes (the trap that stalled discovery). Detected by reading the bound
-  buffer's bytes at draw time when no Map is ever observed.
-- Contents *are* readable at record time (proven via staging copy). The physical
-  buffer is 1920 B; the shader reads only its small declared cb0 from the front,
-  MVP at the reflected offset.
-- **Chosen patch point (implemented, Task 6):** hook `ID3D11Device::CreateBuffer`
-  to catch the pool buffers at creation time and capture a direct, `AddRef`'d
-  CPU pointer via a foreign `Map` issued inline with creation (never `Unmap`d,
-  mirroring the engine's own pattern) — proven live: 16/16 foreign `Map` calls
-  succeeded in a menu-session smoke test, no conflict with the engine's own
-  access observed. At each deferred draw: read the bound slot-0 MVP through
-  that pointer, left-multiply by `K_eye`, write the patched cb0 into **our
-  own** scratch buffer (a per-thread TLS ring, to avoid two worker threads
-  ever `Map`ping the same scratch object), rebind slot 0 before the original
-  draw → our buffer is recorded into the command list. (An earlier once-per-
-  frame batched-staging-copy design was tried and rejected: too coarse to
-  supply genuinely distinct per-draw data — see dead ends below.)
+## 7. Constant-buffer fill mechanism (FINAL — proven, Task 6 closed 2026-08-21)
+- The world's per-object MVP lives in a **small pool of ~6 constant buffers**
+  (one ring per worker thread), bound to VS slot 0, sized 1920 B.
+- **The buffers are created `D3D11_USAGE_DEFAULT` with `CPUAccessFlags=0` —
+  they cannot be `Map`ped under any circumstance, by the D3D11 API's own
+  rules.** This is *why* no Map/Unmap hook ever saw a write (not a timing or
+  instrumentation gap, as earlier rounds assumed) and *why* every earlier
+  "successfully captured 1920-byte buffer via a persistent foreign Map" was
+  actually a same-size **decoy** pool, never bound at slot 0 for a real world
+  draw (see §11 — that decoy pool is real and still exists; it is just not
+  this one).
+- The engine writes the real pool via **`UpdateSubresource`** — the only CPU
+  write path a `DEFAULT`-usage buffer supports.
+- **Chosen patch point (implemented, Task 6, final form):** hook
+  `ID3D11DeviceContext::UpdateSubresource` and shadow every write (including
+  correctly handling a partial-region write via `pDstBox`) into a CPU-side
+  cache keyed by buffer identity. **Register** a buffer identity as a real
+  target only at the *draw* path — a buffer bound at VS slot 0 for a draw
+  whose current shader has a known, contiguous `mvpmatrix` offset — never at
+  `CreateBuffer` time by descriptor alone (size/usage/bind-flags matching is
+  not a sufficient fingerprint; see §11). At each deferred draw: read the
+  shadowed MVP rows, left-multiply by `K` (a per-eye `K_eye` for real stereo;
+  a test rotation for the keystone proof), write the patched cb0 into **our
+  own** scratch buffer (a per-thread TLS ring), rebind slot 0 before the
+  original draw → our buffer is recorded into the command list.
+- **The shadow's single-writer-per-buffer assumption is measured false, not
+  true.** Live gameplay showed 448,201 of 560,109 shadow writes were
+  cross-thread (worker threads hand these buffers between each other across
+  frames). A per-slot seqlock now *detects* rather than assumes this: writes
+  are frequently cross-thread but were never observed genuinely *concurrent*
+  (zero torn reads across every session tested) — the fail-safe skip path
+  exists in code but has not yet fired live. If a target machine's threading
+  ever produces real concurrent writers, this would need promoting to a real
+  per-slot lock; the counter that would reveal that currently only prints
+  during a diagnostic window, not continuously (a tracked, not yet closed,
+  observability gap).
 - **1920 bytes is not a unique fingerprint for the world pool** — a *different*,
   unrelated pair of 1920-byte buffers also exists (a per-frame global,
   refreshed once per `Present` via real `Map`/`Unmap` on the immediate
-  context, bound at VS slot 2/3, not slot 0). The two are reliably told apart
-  by binding slot + context (deferred, slot 0, never `Map`ped = the real
-  pool; immediate, slot 2/3, `Map`ped every frame = the impostor), not by
-  size alone. See §11.
+  context, bound at VS slot 2/3, not slot 0, and IS `Map`pable — a DYNAMIC
+  buffer, unlike the real pool). The two are reliably told apart by binding
+  slot + context + usage class, never by size alone. See §11.
+- **Coverage is ~74–77%, not complete.** Roughly a quarter of MVP-bearing
+  draws still render unpatched: non-contiguous-row shaders (an older, known
+  limitation — the mechanism only patches contiguous layouts) plus a
+  `pool_miss` fraction not yet root-caused. A stereo build would render this
+  fraction at the wrong per-eye orientation until addressed.
 
 ## 8. Pass inventory (by render target)
 - Main scene: 1280×720 colour (formats 28/10/24/61/2 = G-buffer/HDR/aux) with
@@ -167,20 +187,42 @@ zero matches) — confirms there is no hidden/legacy stereo mode to shortcut
 through.
 
 ## 10. Autonomous harness recipe (this game)
-- **Not yet built (Playbook Phase 2 — deferred, not currently a near-term
-  priority; see the 2026-08-20 ledger ruling: the heavy discovery grind that
-  motivated wanting this is done, only a couple of human check-ins remain to
-  reach the stereo-core milestone).** Current constraint: the game pauses
-  when unfocused and rejects external SendInput/SetForegroundWindow, so
-  gameplay captures have needed a human. Planned fix: drive input/camera from
-  *inside* the injected process (hook xinput/dinput polling or the camera update;
-  or use `devmapjump` + camera cvars), plus back-buffer capture to disk.
-  **New lead (2026-08-20, unexplored):** the engine has its own built-in
-  frame-capture system (`com_captureFrames`/`com_capturePath`/`com_captureTGA`,
-  backing an internal `AutoScreenShotSmokeTest`/`MegaScreenShot` tool per exe
-  strings) and a `noclip` console command — either could turn out to be
-  cheaper than a from-scratch D3D11 staging-texture readback or an xinput
-  hook, whenever this phase is picked up.
+- **Substantially working, as of 2026-08-21** (built opportunistically while
+  debugging Task 6, not as planned Phase 2 work — see dev-archive
+  `notes/10-keystone-proof-task6-resolved.md` and `task-6-report.md`'s fix
+  round 4 for the full account).
+- **Deterministic launch to real gameplay:** launch `EvilWithin.exe` *directly*
+  (not via the `steam://` protocol handler) from its own directory, with
+  `steam_appid.txt`=268050 present and the Steam client already running, args
+  `+com_allowconsole 1 +devmapjump st06_asylummain` (a real, confirmed-valid
+  stage name — the game's opening chapter, found via static string extraction
+  from the exe; other candidates seen: `st12_gd`, `st13_prop`,
+  `st40_gamedesign`). Reaches real gameplay in seconds, unattended.
+- **The game shows a "Photosensitivity Warning" splash on the way in that
+  blocks progress until dismissed.** External `SendInput`/`SendKeys`
+  *keyboard* input does **not** dismiss it; a synthetic **mouse click** does.
+  (`com_skipIntroVideo`/`com_skipPressButtonScreen`/`com_skipSignInManager`
+  launch-arg cvars were tried against this specific screen and did not work.)
+  Whether this screen appears may be session-dependent — possibly tied to
+  whether the previous session exited gracefully vs. was force-killed (a
+  "seen this warning" flag that only persists on clean exit is the working
+  theory; unconfirmed).
+- **Frame capture to disk: built and proven end-to-end.** A `TEWVR_FRAMECAPTURE=1`-
+  gated, file-triggered (drop `%LOCALAPPDATA%\TEWVR\capture.txt`) back-buffer
+  capture to BMP, using a staging-texture readback off the already-captured
+  device/context. A controller session can trigger a capture and then view
+  the resulting image directly (no human needs to watch the screen) — this is
+  exactly how the Task 6 keystone proof's images were produced and
+  independently re-verified by two separate reviewers. **Not yet formalised
+  as a reviewed task** — currently an uncommitted-then-locally-committed spike
+  in the mod repo (`proxy-winmm/src/framecapture.c`/`.h`), pending its own
+  SDD task brief + review pass before being treated as production code.
+- **Still open:** in-process input injection for anything beyond a single
+  dismissal click (real camera movement, menu navigation) — Playbook 2.2,
+  not yet attempted. The engine's own built-in frame-capture system
+  (`com_captureFrames`/`com_capturePath`/`com_captureTGA`) remains an
+  unexplored, potentially-cheaper alternative to the custom D3D11 staging
+  readback above.
 - Discovery instruments so far (env-gated, off by default): `TEWVR_SEQDUMP`
   (ordered per-draw event stream with ctx tags + command-list events),
   `TEWVR_SEQDUMP_ARMFILE` (file-triggered arm), `TEWVR_SKIPCL` (live skip of
@@ -216,33 +258,59 @@ through.
   running — replaced with a direct-pointer-capture-at-creation-time design.
   Lesson: "safe to execute" and "supplies correct data" are separate claims:
   check both.
+- **A buffer's `Usage`/`CPUAccessFlags` must be checked before assuming any
+  CPU-read mechanism (`Map`, or a "capture a pointer once" scheme) is even
+  possible.** Two full fix rounds were spent capturing a persistently-mappable
+  1920-byte decoy pool via a foreign `Map` at `CreateBuffer` time — it worked
+  perfectly as a *mechanism*, live-tested with zero failures, and was still
+  entirely wrong, because the real world pool is `D3D11_USAGE_DEFAULT` and
+  categorically cannot be `Map`ped. The only way this was found was by
+  checking the real buffers' actual creation-time descriptor against what the
+  chosen read mechanism requires — not by the mechanism "working" in testing.
+  A mechanism that runs cleanly can still be reading the wrong buffers.
+- **Filtering `CreateBuffer` calls by descriptor alone (size/usage/bind-flags),
+  however tight the band, cannot discriminate a real target from a decoy that
+  happens to share the same profile.** The only property that actually
+  identifies "this is the buffer we want" is *how it's used* — bound at a
+  specific slot, for a draw whose shader has the property we care about —
+  which is only observable at the point of use. Two different bugs in this
+  project (the original wide-filter decoy-flooding in fix round 2, and the
+  buffer-identity confusion in fix round 4) both trace back to this same
+  root cause. Prefer registering/identifying resources by USE, not by
+  creation-time descriptor, whenever the two might diverge.
 
 ## 12. Open risks toward the North Star
-- Keystone proof (own the camera on the deferred-recorded world) — **code
-  landed and reviewed clean (2026-08-20)**, runtime yaw-rotation proof itself
-  still pending a human-witnessed gameplay session.
+- ~~Keystone proof~~ **RESOLVED (2026-08-21).** Own-the-camera on the
+  deferred-recorded world is proven, twice-independently-reviewed. See §7 and
+  dev-archive `notes/10-keystone-proof-task6-resolved.md`.
 - Double-render on a deferred-context engine: re-execute command lists per eye
   vs. record a second pass — mechanism chosen but unproven at runtime. (Task 6
-  and Task 7 are now expected to merge: patch-and-draw-twice-per-original-call
-  at record time, once per eye, rather than re-executing a command list.)
-- Persistent-map source read: the AddRef/lifetime bug is fixed (traced
-  correct on every code path by review); cross-thread safety of the new
-  `CreateBuffer`-hook's foreign `Map` (issued from whatever thread
-  `CreateBuffer` fires on, not necessarily the render thread) is de-risked by
-  a clean live smoke test (16/16 succeeded) but not fully proven — see the
-  2026-08-20 offline-research note for what static evidence could and
-  couldn't establish here.
+  and Task 7 are confirmed to merge, now that Task 6's real patch point is
+  known precisely: patch-and-draw-twice-per-original-call at record time, once
+  per eye, rather than re-executing a command list.)
+- **Coverage gap (~74–77%).** A real, measured fraction of MVP-bearing world
+  draws render unpatched (non-contiguous shader row layouts, plus an
+  unexplained `pool_miss` residual). Must be closed, or at least understood
+  and bounded, before Task 7/8 — an unpatched draw in a stereo build renders
+  at the wrong per-eye orientation, not just mono-incorrectly.
+- **Shadow writer-concurrency risk, measured safe not structurally guaranteed.**
+  The world cb0 shadow's single-writer assumption is false (writes are
+  routinely cross-thread) but writes have never been observed truly
+  concurrent (a seqlock would detect and fail-safe-skip if they were). This
+  holds on the dev machine across every session tested; it is not proven to
+  hold on different hardware/thread-scheduling. The counter that would reveal
+  a violation currently only prints during a diagnostic window, not
+  continuously — needs a one-line visibility fix before this can be trusted
+  as "monitored" rather than "measured once."
 - **New (2026-08-20): tessellated/Domain-Shader geometry is invisible to the
   current patch mechanism.** At least two skinned-mesh vertex shaders never
   compute `SV_Position` themselves (a Domain Shader does, downstream) — see
-  §8. Expect this geometry not to rotate during the keystone proof; it's an
-  understood gap, not a regression, but will need its own future work
-  (hooking Domain Shader constant buffers) before it's covered.
+  §8. Confirmed as an understood gap, not a regression — this geometry
+  renders unpatched, consistent with the coverage gap above.
 - Post/AA (SMAA, motion vectors) per-eye consistency deferred — now fully
   characterised with exact shader offsets (§8), ready to implement whenever
   this is picked up.
-- Buffer-identity ambiguity for the `CreateBuffer` candidate pool (§7, §11):
-  resolved analytically via old capture data, but the true ~1920 B world-pool
-  buffers have still never been *observed* captured by the live hook in a
-  real gameplay session (only inferred to be catchable) — first thing for
-  the pending Step 3 session to confirm.
+- `K` in the keystone proof is a raw clip-space post-multiply (`K · mvp`),
+  proven sufficient for an ownership proof but explicitly not the real
+  per-eye transform — Task 7/8 must build the actual `K_eye` per §6's
+  documented maths.
