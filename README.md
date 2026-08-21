@@ -14,6 +14,19 @@ For the readable field notes, see
 For actual working mod releases, see
 [the-evil-within-vr-mod](https://github.com/TefMeister/the-evil-within-vr-mod).
 
+## The five repositories for The Evil Within VR
+
+Everything for this game lives in five repositories, each with one job — so you
+always know where to look. You are in **the-evil-within-vr-dev-archive**.
+
+| Repository | What lives here |
+| --- | --- |
+| [the-evil-within-vr-mod](https://github.com/TefMeister/the-evil-within-vr-mod) | The mod itself — a `winmm.dll` proxy driving stereo via D3D11 hooks (pre-release; source). |
+| **the-evil-within-vr-dev-archive** ← you are here | Full development history — snapshots, probes, dead ends, raw recon. |
+| [the-evil-within-vr-modding-notes](https://github.com/TefMeister/the-evil-within-vr-modding-notes) | Readable field notes / progress ledger. |
+| [the-evil-within-vr-staging](https://github.com/TefMeister/the-evil-within-vr-staging) 🔒 | **Private** — unverified WIP builds, cross-machine handoff. |
+| [the-evil-within-vr-engine-research](https://github.com/TefMeister/the-evil-within-vr-engine-research) | Distilled engine reference (dossier) + reusable VR RE playbook. |
+
 ## The project
 
 This project aims to add full 6DOF VR support to **The Evil Within** (2014,
