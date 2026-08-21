@@ -126,30 +126,72 @@ typedef HRESULT(STDMETHODCALLTYPE *CreateBuffer_t)(ID3D11Device *, const D3D11_B
  * requirement). */
 #define MVP_CB_BYTES 512
 
-/* CreateBuffer filter: wide enough to catch the ~1920B world cb0 pool
- * buffers (Task 6 discovery), narrow enough to exclude the small 96-224B
- * per-shader cb0 buffers the engine explicitly Maps/Unmaps every draw
- * (Task 5 finding: "ALL cb fills are Map/DISCARD") - persistently mapping
- * THOSE ourselves would conflict with the engine's own frequent Map cycle
- * on them, unlike the pool buffers this mechanism targets. */
-#define MVP_POOL_BUF_MIN_BYTES 512
-#define MVP_POOL_BUF_MAX_BYTES 8192
+/* CreateBuffer filter: a TIGHT band around the world cb0 pool buffers'
+ * real size, not a wide "roughly constant-buffer-pool-shaped" range.
+ *
+ * Fix round 1 used [512, 8192] ("wide enough to catch ~1920B, narrow
+ * enough to exclude 96-224B per-shader cb0s") and a real human-witnessed
+ * gameplay session (Step 3, TEWVR_TEST_YAW=20 confirmed active, 15,600+
+ * frames, world did NOT rotate) proved that band far too wide: real
+ * gameplay creates many OTHER dynamic constant buffers in the 512-8192
+ * range with nothing to do with the world MVP pool (lighting, cloth,
+ * particles, per-object data of various kinds) - observed sizes 512, 528,
+ * 544, 560, 608, 624, 656, 704, 720, 752, 784, 864, 912, 1168, 1184, 1200,
+ * 1264, 1392, 1536 - and they filled the entire MVP_DIRECT_POOL_MAX (then
+ * 48) capacity before the real ~1920B buffers were ever created, silently
+ * dropping the actual target forever for the rest of the session
+ * (mvp_direct_pool_try_capture()'s "pool full" branch).
+ *
+ * Re-verified the real target's size independently from two historical
+ * capture logs before narrowing this band:
+ *   - D:\TheEvilWithinVR\captures\task6-cbpeek-seqdump.log: every one of
+ *     192 CBPEEK content-read lines for the world MVP buffer reads
+ *     size=1920, with ZERO variance (the other sizes present in that log -
+ *     384x40, 96x10, 64x1 - are the slot2/3 skinning-decoy pair and small
+ *     per-shader cb0s, not this buffer).
+ *   - D:\TheEvilWithinVR\captures\task6-gameplay-seqdump.log: every
+ *     VSSETCB line binding a buffer to VS slot 0 shows either exactly
+ *     :1920 (2992 occurrences - the world pool) or one of the small
+ *     per-shader sizes already characterised by Task 4/5 (96/224/128/64/
+ *     16/160/80/272/176/144, all comfortably excluded by any band starting
+ *     above ~512) - NEVER any value near-but-not-exactly 1920.
+ * Both logs agree: the real buffer's size is exactly 1920 bytes, with no
+ * observed variance across ~3200 combined samples from two different
+ * capture sessions.
+ *
+ * Given that, [1856, 1984] (1920 +/- 64, both multiples of 16 - the
+ * required D3D11 constant-buffer alignment) is the chosen band: tight
+ * enough to leave a >300-byte margin on both sides of every OTHER buffer
+ * size observed competing for this filter in real gameplay (nearest
+ * competitor below is 1536 - a 320-byte gap to 1856; nothing was ever
+ * observed between 1536 and 1920 at all, though the fix-round-1 pool
+ * filling up before 1920 ever appeared means that gap is not fully
+ * verified empty), while still tolerating a modest amount of per-level/
+ * scene size variation (e.g. a different level's material layout adding a
+ * few more constants to the pool's declared size) that an exact
+ * `== 1920` match would not survive. If a future session's evidence shows
+ * the real buffer size varying outside this band (e.g. a DLC level with a
+ * differently-sized pool), widen it then, informed by that evidence -
+ * exactly the same way this band itself was chosen. */
+#define MVP_POOL_BUF_MIN_BYTES 1856
+#define MVP_POOL_BUF_MAX_BYTES 1984
 
 /* Distinct candidate buffer identities this module will ever try to
- * persistently map. Task 6 discovery observed ~6 for the specific world
- * MVP pool, but a menu-level smoke test of THIS mechanism (post-review)
- * found the [MIN,MAX] filter above also matches other dynamic constant
- * buffers in the same size class that are NOT the ~1920B world pool
- * (16 candidates captured at the menu alone, all 512-608B, none anywhere
- * near 1920B - the real world-pool buffers may only be created once real
- * gameplay/a level loads, not at the menu). Sized generously (not just
- * "~6 + headroom") specifically so those unrelated smaller buffers
- * captured early (at the menu, before a real level is ever loaded) cannot
- * exhaust this pool and cause the ACTUAL ~1920B world buffers to be missed
- * (silently left uncaptured, hence unpatchable) once real gameplay starts
- * and creates them later. Each entry is tiny (a pointer + a CPU pointer +
- * a UINT), so a larger cap costs nothing. */
-#define MVP_DIRECT_POOL_MAX 48
+ * persistently map. Task 5/6 discovery observed ~6 for the specific world
+ * MVP pool (one per deferred worker thread). Fix round 1 sized this
+ * generously (48) specifically to survive a WIDE, decoy-prone filter;
+ * now that the filter above is a tight band only the real pool (and
+ * anything else that also happens to be almost exactly 1920 bytes, which
+ * no capture has ever shown) can match, decoys are no longer expected to
+ * contend for slots at all. Reduced to 16 - still ~2.5x headroom over the
+ * expected steady-state ~6, enough to tolerate the pool being recreated
+ * (a fresh set of ~6 buffers) once or twice across a session (e.g. on a
+ * level transition) without the old, now-orphaned identities' slots ever
+ * being reclaimed (this module has no eviction - see the Concerns note in
+ * the report about revisiting that if a session ever legitimately needs
+ * more than 16). Each entry is tiny (a pointer + a CPU pointer + a UINT),
+ * so this remains cheap either way. */
+#define MVP_DIRECT_POOL_MAX 16
 
 /* Per-thread scratch-buffer sub-rings: MVP_THREADS_MAX comfortably exceeds
  * the 7 threads (6 deferred workers + 1 immediate/render) Task 5's
