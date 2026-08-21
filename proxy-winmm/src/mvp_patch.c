@@ -35,7 +35,43 @@
  * that same cb0 window too (material params etc., not just MVP). Caught in
  * review before any live test masked it as "the world didn't rotate."
  *
- * REVISED CHOICE: (b). A CreateBuffer hook (VTBL_DEV_CREATEBUFFER=3, cross-
+ * ============================================================
+ * FIX ROUND 4 (2026-08-21): THE CHOICE BELOW IS SUPERSEDED.
+ *
+ * Option (b) - Map the world cb0 buffer once at creation and keep the CPU
+ * pointer forever - is IMPOSSIBLE for the real target buffers. Measured
+ * during a visually-confirmed gameplay session, the buffers actually bound
+ * at VS slot 0 for world draws are:
+ *
+ *     ByteWidth=1920  Usage=D3D11_USAGE_DEFAULT  CPUAccessFlags=0
+ *
+ * A DEFAULT / no-CPU-access resource cannot be Mapped at all. The 1920-byte
+ * DYNAMIC/CPU_WRITE buffers the filter described below was successfully
+ * capturing are a same-size DECOY set, never bound at slot 0 for a world
+ * draw (their pointers are disjoint from the five 1920-byte slot-0 pointers
+ * in task6-gameplay-seqdump.log).
+ *
+ * CURRENT MECHANISM - call it option (d), UpdateSubresource shadowing:
+ * UpdateSubresource is the only CPU write path for a DEFAULT buffer, so
+ * that call is where the live MVP content is observable.
+ * Hook_UpdateSubresource copies the caller's source bytes into our own
+ * per-buffer CPU shadow before calling through, and the draw path reads the
+ * shadow exactly where it used to read the mapped pointer. Everything
+ * downstream (row extraction, K*mvp, scratch buffer, rebind) is unchanged.
+ * Buffers are registered from the DRAW path, not from CreateBuffer, because
+ * a descriptor alone cannot distinguish the world pool from same-shaped
+ * decoys. See the two large fix-round-4 blocks further down this file for
+ * the full evidence, and Fix round 4 in task-6-report.md.
+ *
+ * Also retired by this change: the "the engine's own later Map could
+ * conflict with ours" residual risk. This module no longer Maps the
+ * engine's buffers at all.
+ *
+ * The historical reasoning below is retained because it explains why the
+ * earlier mechanisms were chosen and how each was disproved.
+ * ============================================================
+ *
+ * SUPERSEDED CHOICE: (b). A CreateBuffer hook (VTBL_DEV_CREATEBUFFER=3, cross-
  * checked against shaderdump.c's own already-verified ID3D11Device vtable
  * count) filters for buffers matching the world-pool's known profile
  * (D3D11_BIND_CONSTANT_BUFFER, D3D11_USAGE_DYNAMIC, D3D11_CPU_ACCESS_WRITE,
@@ -114,17 +150,30 @@
 #define VTBL_CTX_DRAWINDEXED 12
 #define VTBL_CTX_DRAW        13
 #define VTBL_DEV_CREATEBUFFER 3
+/* Fix round 4: index 48, matching cbdump.c's and seqdump.c's already-
+ * verified ID3D11DeviceContext::UpdateSubresource slot. */
+#define VTBL_CTX_UPDATESUBRESOURCE 48
 
 typedef void(STDMETHODCALLTYPE *DrawIndexed_t)(ID3D11DeviceContext *, UINT, UINT, INT);
 typedef void(STDMETHODCALLTYPE *Draw_t)(ID3D11DeviceContext *, UINT, UINT);
 typedef HRESULT(STDMETHODCALLTYPE *CreateBuffer_t)(ID3D11Device *, const D3D11_BUFFER_DESC *,
                                                     const D3D11_SUBRESOURCE_DATA *, ID3D11Buffer **);
+typedef void(STDMETHODCALLTYPE *UpdateSubresource_t)(ID3D11DeviceContext *, ID3D11Resource *, UINT,
+                                                      const D3D11_BOX *, const void *, UINT, UINT);
 
-/* Fixed local-copy/scratch window: generously above every reflected cb0
- * size observed in Task 4/5/6 discovery (96/160/224B, mvp rows at worst
- * +144..+192), and a multiple of 16 (D3D11 constant-buffer size
- * requirement). */
-#define MVP_CB_BYTES 512
+/* Fixed local-copy/scratch window.
+ *
+ * FIX ROUND 4: raised 512 -> 2048. This MUST be >= the real world cb0's
+ * size (1920 bytes), not merely >= the largest reflected mvp row offset:
+ * mvp_patch_prepare() binds a scratch buffer *in place of* the engine's own
+ * cb0, so a 512-byte scratch standing in for a 1920-byte cb0 would leave
+ * bytes 512..1919 of that constant buffer undefined (reads past a bound
+ * constant buffer's end return zero) - i.e. every OTHER per-object constant
+ * in the world cb0 would be silently zeroed for every patched draw. That
+ * would have rendered visibly-broken geometry the moment patching started
+ * working, and read as "camera ownership failed". 2048 is the next multiple
+ * of 16 above 1920 with a little headroom. */
+#define MVP_CB_BYTES 2048
 
 /* CreateBuffer filter: a TIGHT band around the world cb0 pool buffers'
  * real size, not a wide "roughly constant-buffer-pool-shaped" range.
@@ -190,8 +239,19 @@ typedef HRESULT(STDMETHODCALLTYPE *CreateBuffer_t)(ID3D11Device *, const D3D11_B
  * being reclaimed (this module has no eviction - see the Concerns note in
  * the report about revisiting that if a session ever legitimately needs
  * more than 16). Each entry is tiny (a pointer + a CPU pointer + a UINT),
- * so this remains cheap either way. */
-#define MVP_DIRECT_POOL_MAX 16
+ * so this remains cheap either way.
+ *
+ * FIX ROUND 4b UPDATE: the reasoning above (a tight descriptor band keeps
+ * decoys out) turned out to be wrong on real evidence - the corrected
+ * DEFAULT/1920B band still matched 16 buffers before the main menu had
+ * finished, filling this pool with decoys exactly as the wide band did.
+ * Registration therefore moved to the draw path, where the criterion is
+ * "actually bound at VS slot 0 for a draw with a usable mvpmatrix" - so
+ * decoys structurally cannot occupy slots any more. 32 is generous headroom
+ * over the ~5-6 buffers a level actually uses, leaving room for several
+ * level transitions' worth of orphaned identities (this module still has no
+ * eviction - see the report's Concerns). */
+#define MVP_DIRECT_POOL_MAX 32
 
 /* Per-thread scratch-buffer sub-rings: MVP_THREADS_MAX comfortably exceeds
  * the 7 threads (6 deferred workers + 1 immediate/render) Task 5's
@@ -216,6 +276,7 @@ static int mvp_rate_limit_should_fire(volatile LONG *counter) {
 }
 static volatile LONG g_map_fail_log_count = 0;
 static volatile LONG g_offset_oob_log_count = 0;
+static volatile LONG g_update_bug_log_count = 0;
 
 /* ---- per-draw skip-reason diagnostics (Task 6 fix round 3) ----
  * Added after a real gameplay session (TEWVR_TEST_YAW=90, correct
@@ -251,6 +312,145 @@ static volatile LONG g_diag_patched = 0;             /* success: a draw was actu
 static volatile LONG g_pool_miss_first_logged = 0; /* sticky one-shot gate for the detailed first-miss log */
 static volatile LONG g_diag_report_gate = 0;       /* ensures only one thread performs a given periodic report */
 static ULONGLONG g_diag_last_report_ms = 0;        /* only ever touched by whichever thread currently holds g_diag_report_gate */
+
+/* ---- fix round 4 diagnostics: WHAT are the missed buffers, and did our
+ * CreateBuffer hook ever see them created? ----
+ *
+ * Round 3's counters proved pool_miss dominates during real gameplay
+ * (~180k/5s, patched=0, with 4 correct 1920B buffers in the pool). That
+ * leaves exactly two possible explanations, and they need opposite fixes:
+ *
+ *   (A) Our CreateBuffer hook DID see the bound buffer get created, but the
+ *       [1856,1984]-byte DYNAMIC/CPU_WRITE filter rejected it -> the filter
+ *       (or the whole "the world pool is DYNAMIC" premise) is wrong.
+ *   (B) Our CreateBuffer hook NEVER saw it created at all -> the hook does
+ *       not cover whatever device/vtable the engine really creates its
+ *       world buffers on; a filter change would be useless.
+ *
+ * `g_seen_cb[]` records EVERY constant buffer that passes through
+ * Hook_CreateBuffer (pointer + desc, bounded, no AddRef - this is a
+ * pointer-identity diagnostic only, and a freed-then-reused pointer can at
+ * worst mislabel one sample). A sampled pool-miss then looks the missed
+ * buffer up in it, which discriminates (A) from (B) directly. */
+/* Tentative declarations so the diagnostic reporter below can read state
+ * that is defined further down (C tentative definitions - the real
+ * definitions, with initializers, follow in their own sections). */
+static int g_direct_pool_count;
+static int g_update_target_count;
+static volatile LONG g_shadow_writes;
+static volatile LONG g_diag_shadow_empty;
+
+#define MVP_SEEN_CB_MAX      2048
+#define MVP_MISS_COMBO_MAX   24
+#define MVP_MISS_SAMPLE_MASK 0xFF /* GetDesc on ~1 in 256 pool-misses (~140/s at observed rates) */
+#define MVP_REGISTER_PROBE_MASK 0x3F /* try registering a missed buffer on ~1 in 64 misses */
+
+struct SeenCb {
+    ID3D11Buffer *buf;
+    UINT byte_width, usage, bind, cpu;
+};
+static struct SeenCb g_seen_cb[MVP_SEEN_CB_MAX];
+static volatile LONG g_seen_cb_count = 0;
+
+struct MissCombo {
+    UINT byte_width, usage, bind, cpu;
+    LONG seen_created;   /* sampled misses whose buffer WAS created through our hook */
+    LONG unseen_created; /* sampled misses whose buffer was NEVER seen by our hook */
+};
+static struct MissCombo g_miss_combo[MVP_MISS_COMBO_MAX];
+static volatile LONG g_miss_combo_count = 0;
+static volatile LONG g_miss_sample_tick = 0;
+
+static volatile LONG g_cb_create_total = 0; /* every CreateBuffer call our hook saw */
+static volatile LONG g_cb_create_const = 0; /* ...of which were constant buffers */
+
+/* Lock-free append-only record of one created constant buffer. Overflow is
+ * silently ignored (bounded diagnostic, never an error path). */
+static void mvp_seen_cb_record(ID3D11Buffer *buf, const D3D11_BUFFER_DESC *d) {
+    LONG idx = InterlockedIncrement(&g_seen_cb_count) - 1;
+    if (idx < 0 || idx >= MVP_SEEN_CB_MAX) {
+        return;
+    }
+    g_seen_cb[idx].byte_width = d->ByteWidth;
+    g_seen_cb[idx].usage = (UINT)d->Usage;
+    g_seen_cb[idx].bind = d->BindFlags;
+    g_seen_cb[idx].cpu = d->CPUAccessFlags;
+    g_seen_cb[idx].buf = buf; /* published last, same convention as the direct pool */
+}
+
+static int mvp_seen_cb_contains(ID3D11Buffer *buf) {
+    LONG i, n = g_seen_cb_count;
+    if (n > MVP_SEEN_CB_MAX) {
+        n = MVP_SEEN_CB_MAX;
+    }
+    for (i = 0; i < n; i++) {
+        if (g_seen_cb[i].buf == buf) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Called on ~1 in 256 pool-misses. Buckets the missed buffer's real desc by
+ * distinct (size, usage, bind, cpu) combo and tallies whether our hook ever
+ * saw it created. Lock-free; a rare duplicate combo row under a race is
+ * harmless for a diagnostic. */
+static void mvp_miss_sample(ID3D11Buffer *buf) {
+    D3D11_BUFFER_DESC bd;
+    LONG i, n, idx;
+    int seen;
+
+    memset(&bd, 0, sizeof(bd));
+    ID3D11Buffer_GetDesc(buf, &bd);
+    seen = mvp_seen_cb_contains(buf);
+
+    n = g_miss_combo_count;
+    if (n > MVP_MISS_COMBO_MAX) {
+        n = MVP_MISS_COMBO_MAX;
+    }
+    for (i = 0; i < n; i++) {
+        if (g_miss_combo[i].byte_width == bd.ByteWidth && g_miss_combo[i].usage == (UINT)bd.Usage &&
+            g_miss_combo[i].bind == bd.BindFlags && g_miss_combo[i].cpu == bd.CPUAccessFlags) {
+            InterlockedIncrement(seen ? &g_miss_combo[i].seen_created : &g_miss_combo[i].unseen_created);
+            return;
+        }
+    }
+
+    idx = InterlockedIncrement(&g_miss_combo_count) - 1;
+    if (idx < 0 || idx >= MVP_MISS_COMBO_MAX) {
+        return; /* table full - the first 24 distinct combos are plenty to diagnose with */
+    }
+    g_miss_combo[idx].usage = (UINT)bd.Usage;
+    g_miss_combo[idx].bind = bd.BindFlags;
+    g_miss_combo[idx].cpu = bd.CPUAccessFlags;
+    if (seen) {
+        g_miss_combo[idx].seen_created = 1;
+    } else {
+        g_miss_combo[idx].unseen_created = 1;
+    }
+    g_miss_combo[idx].byte_width = bd.ByteWidth; /* published last (its non-zero-ness is not
+                                                     relied on, but keeps the same convention) */
+}
+
+/* Dumps the miss-combo table + CreateBuffer coverage counters. Called only
+ * from the (already rate-limited, single-threaded-by-gate) periodic report. */
+static void mvp_diag_report_misses(void) {
+    LONG i, n = g_miss_combo_count;
+    if (n > MVP_MISS_COMBO_MAX) {
+        n = MVP_MISS_COMBO_MAX;
+    }
+    log_msg("mvp_patch: DIAG CreateBuffer coverage: total_calls_seen=%ld of which constant_buffers=%ld "
+             "(recorded identities=%ld, cap %d); world cb0 pool holds %d; UpdateSubresource targets "
+             "hooked=%d, shadow writes=%ld, draws skipped for an empty shadow=%ld",
+             g_cb_create_total, g_cb_create_const, g_seen_cb_count, MVP_SEEN_CB_MAX, g_direct_pool_count,
+             g_update_target_count, g_shadow_writes, g_diag_shadow_empty);
+    for (i = 0; i < n; i++) {
+        log_msg("mvp_patch: DIAG miss-combo[%ld]: ByteWidth=%u Usage=%u BindFlags=0x%X CPUAccess=0x%X "
+                 "| sampled misses: created-through-our-hook=%ld NEVER-seen-by-our-hook=%ld",
+                 i, g_miss_combo[i].byte_width, g_miss_combo[i].usage, g_miss_combo[i].bind,
+                 g_miss_combo[i].cpu, g_miss_combo[i].seen_created, g_miss_combo[i].unseen_created);
+    }
+}
 
 /* Cheap on every call (one InterlockedCompareExchange, and - in the
  * overwhelming majority of calls - one GetTickCount64 + comparison, then
@@ -304,6 +504,11 @@ static void mvp_diag_maybe_report(void) {
                  MVP_DIAG_REPORT_INTERVAL_MS, patched, not_installed, no_vs, shader_unknown,
                  shader_no_mvp, shader_noncontig, no_slot0_buf, pool_miss, bounds_fail,
                  scratch_not_ready, scratch_alloc_fail, scratch_map_fail);
+        if (pool_miss > 0 && patched == 0) {
+            /* Only while the round-4 mystery is actually happening (misses
+             * but no successes) - goes quiet by itself once patching works. */
+            mvp_diag_report_misses();
+        }
     }
     /* Deliberately silent if EVERY counter is 0 (e.g. at the menu, before
      * any draw reaches mvp_patch_prepare() at all, or between reports with
@@ -329,15 +534,28 @@ static int g_installed = 0;
 /* ---- direct persistent-pointer pool (Step 0's chosen mechanism) ---- */
 
 struct DirectPoolEntry {
-    ID3D11Buffer *buf; /* NULL until captured; written LAST on capture (see
+    ID3D11Buffer *buf; /* NULL until registered; written LAST (see
                            mvp_direct_pool_try_capture()) - a non-NULL read
                            here is this slot's "ready" signal */
-    void *cpu_ptr;      /* persistent CPU-writable pointer from our own
-                            Map(WRITE_DISCARD), never Unmapped */
+    void *cpu_ptr;      /* live CPU-readable copy of this buffer's content:
+                            fix round 4 makes this our own shadow, kept
+                            current by Hook_UpdateSubresource */
     UINT byte_width;
 };
+
+/* Fix round 4: CPU shadow storage, one MVP_CB_BYTES window per pool slot.
+ * Statically allocated (32KB total at the current caps) so registration
+ * needs no allocator and can never fail for lack of memory. */
+static unsigned char g_shadow[MVP_DIRECT_POOL_MAX][MVP_CB_BYTES];
+/* 0 until Hook_UpdateSubresource has written real content into that slot's
+ * shadow. mvp_direct_pool_find() refuses to hand out a not-yet-written
+ * shadow: patching a draw from an all-zero shadow would apply a confidently
+ * wrong zero matrix instead of falling through unpatched. */
+static volatile LONG g_shadow_valid[MVP_DIRECT_POOL_MAX];
+static volatile LONG g_shadow_writes = 0;   /* UpdateSubresource calls that fed a pool shadow */
+static volatile LONG g_diag_shadow_empty = 0; /* draws skipped because the shadow had no content yet */
 static struct DirectPoolEntry g_direct_pool[MVP_DIRECT_POOL_MAX];
-static int g_direct_pool_count = 0;
+static int g_direct_pool_count = 0; /* forward-declared above for the round-4 diagnostics */
 static int g_direct_pool_full_warned = 0;
 static CRITICAL_SECTION g_direct_pool_cs; /* guards reservation of a new slot only - see below */
 static int g_direct_pool_cs_ready = 0;
@@ -452,6 +670,13 @@ static void *mvp_direct_pool_find(ID3D11Buffer *buf, UINT *out_byte_width) {
     n = g_direct_pool_count;
     for (i = 0; i < n; i++) {
         if (g_direct_pool[i].buf == buf) {
+            if (!g_shadow_valid[i]) {
+                /* Registered, but Hook_UpdateSubresource has not yet fed it
+                 * any content - fall through unpatched rather than patch
+                 * from an all-zero shadow (fix round 4). */
+                InterlockedIncrement(&g_diag_shadow_empty);
+                return NULL;
+            }
             *out_byte_width = g_direct_pool[i].byte_width;
             return g_direct_pool[i].cpu_ptr;
         }
@@ -468,48 +693,35 @@ static void *mvp_direct_pool_find(ID3D11Buffer *buf, UINT *out_byte_width) {
  * unfilled (buf stays NULL forever - a small, bounded, accepted waste of
  * one slot, not a correctness issue: mvp_direct_pool_find() simply never
  * matches it). Never crashes, never blocks a draw. */
-static void mvp_direct_pool_try_capture(ID3D11Device *dev, ID3D11Buffer *buf, UINT byte_width) {
-    ID3D11DeviceContext *ctx = NULL;
-    D3D11_MAPPED_SUBRESOURCE mapped;
-    HRESULT hr;
-    int idx;
+static void mvp_direct_pool_try_capture(ID3D11Buffer *buf, UINT byte_width) {
+    int idx, i;
 
     EnterCriticalSection(&g_direct_pool_cs);
+    /* Dedupe: this is now called repeatedly from the draw path (see
+     * mvp_try_register_bound_buffer), so the same buffer will be offered
+     * many times before and after it is registered. */
+    for (i = 0; i < g_direct_pool_count; i++) {
+        if (g_direct_pool[i].buf == buf) {
+            LeaveCriticalSection(&g_direct_pool_cs);
+            return;
+        }
+    }
     if (g_direct_pool_count >= MVP_DIRECT_POOL_MAX) {
         LeaveCriticalSection(&g_direct_pool_cs);
         if (!g_direct_pool_full_warned) {
             g_direct_pool_full_warned = 1;
-            log_msg("mvp_patch: direct-map candidate pool full (%d); further matching constant "
-                     "buffers won't get a persistent CPU pointer (their draws render unpatched)",
-                     MVP_DIRECT_POOL_MAX);
+            log_msg("mvp_patch: world cb0 pool full (%d); further matching constant buffers won't "
+                     "get a shadow (their draws render unpatched)", MVP_DIRECT_POOL_MAX);
         }
         return;
     }
     idx = g_direct_pool_count++;
     LeaveCriticalSection(&g_direct_pool_cs);
 
-    ID3D11Device_GetImmediateContext(dev, &ctx);
-    if (ctx == NULL) {
-        log_msg("mvp_patch: GetImmediateContext failed for a %u-byte candidate constant buffer; "
-                 "not persistently mapped (its draws will render unpatched)", byte_width);
-        return;
-    }
-
-    hr = ID3D11DeviceContext_Map(ctx, (ID3D11Resource *)buf, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-    ID3D11DeviceContext_Release(ctx);
-
-    if (FAILED(hr) || mapped.pData == NULL) {
-        log_msg("mvp_patch: STEP0 - foreign Map(WRITE_DISCARD) on a %u-byte candidate constant buffer "
-                 "FAILED (hr=0x%08lX) - NOT persistently mapped; its draws will render unpatched "
-                 "(fail-safe). This is the exact risk the brief flagged for this mechanism - if this "
-                 "fires, option (b) does not work for this buffer and a fallback mechanism is needed.",
-                 byte_width, (unsigned long)hr);
-        return;
-    }
-
     ID3D11Buffer_AddRef(buf); /* our OWN reference, independent of the engine's - released only in mvp_patch_remove() */
 
-    g_direct_pool[idx].cpu_ptr = mapped.pData;
+    memset(g_shadow[idx], 0, MVP_CB_BYTES);
+    g_direct_pool[idx].cpu_ptr = g_shadow[idx];
     g_direct_pool[idx].byte_width = byte_width;
     /* `buf` written LAST: mvp_direct_pool_find() (lock-free) treats a
      * non-NULL buf as "this slot is ready", so cpu_ptr/byte_width must
@@ -518,9 +730,276 @@ static void mvp_direct_pool_try_capture(ID3D11Device *dev, ID3D11Buffer *buf, UI
      * g_d3d_ready, shaderdump.c's g_current_vs). */
     g_direct_pool[idx].buf = buf;
 
-    log_msg("mvp_patch: STEP0 - persistently mapped candidate constant buffer #%d (%u bytes, buf=%p) - "
-             "direct CPU pointer captured; its draws are now patchable with no per-frame GPU work",
+    log_msg("mvp_patch: STEP0 - registered world cb0 buffer #%d (%u bytes, buf=%p); its content is "
+             "shadowed on every UpdateSubresource, so its draws are patchable with no per-frame GPU work",
              idx, byte_width, (void *)buf);
+}
+
+/* FIX ROUND 4b: register world cb0 buffers from the DRAW path, not from
+ * CreateBuffer.
+ *
+ * Registering at CreateBuffer time has now failed three separate ways
+ * (rounds 1, 2 and the first half of round 4) for the same structural
+ * reason: at creation time a buffer's descriptor is the ONLY thing we know
+ * about it, and the descriptor alone does not distinguish the world cb0
+ * pool from same-shaped buffers the engine creates for other purposes. The
+ * first measurement of the corrected DEFAULT/1920B filter found 16 matching
+ * buffers created before the main menu even finished - filling the pool
+ * with decoys all over again, exactly as the wide DYNAMIC filter did in
+ * round 2.
+ *
+ * The draw path knows something CreateBuffer never can: this buffer is
+ * actually bound at VS slot 0 for a draw whose shader has a usable
+ * mvpmatrix. That is the real definition of "a world cb0 buffer", so it is
+ * the right place to decide. The pool then only ever holds buffers that
+ * genuinely matter (~5-6 per level, matching the five distinct 1920-byte
+ * slot-0 pointers in task6-gameplay-seqdump.log), decoys can never crowd it
+ * out no matter how many the engine creates, and the CreateBuffer filter
+ * stops being load-bearing at all.
+ *
+ * Cost: one ID3D11Buffer::GetDesc on a sampled fraction of pool misses
+ * (~1 in 64, a few hundred per second at observed draw rates). The same
+ * handful of buffers recur thousands of times per second, so every one of
+ * them is registered within a few milliseconds of the level starting to
+ * render. Registration is idempotent (the dedupe scan above). */
+static void mvp_try_register_bound_buffer(ID3D11Buffer *buf) {
+    D3D11_BUFFER_DESC bd;
+
+    memset(&bd, 0, sizeof(bd));
+    ID3D11Buffer_GetDesc(buf, &bd);
+
+    if (!(bd.BindFlags & D3D11_BIND_CONSTANT_BUFFER)) {
+        return;
+    }
+    /* DEFAULT + no CPU access is the measured profile of the real world
+     * cb0 buffers, and is also exactly the class that UpdateSubresource is
+     * the only CPU write path for - i.e. the class this module's shadow
+     * mechanism can actually track. A DYNAMIC buffer would never receive a
+     * shadow write and would only waste a slot. */
+    if (bd.Usage != D3D11_USAGE_DEFAULT || bd.CPUAccessFlags != 0) {
+        return;
+    }
+    if (bd.ByteWidth < MVP_POOL_BUF_MIN_BYTES || bd.ByteWidth > MVP_POOL_BUF_MAX_BYTES) {
+        return;
+    }
+    mvp_direct_pool_try_capture(buf, bd.ByteWidth);
+}
+
+/* ============ fix round 4: UpdateSubresource shadowing ============
+ *
+ * WHY this replaces the persistent-Map read mechanism entirely.
+ *
+ * Fix round 3's counters, run against a visually-confirmed real gameplay
+ * session (frame capture showing world geometry), reported ~180,000
+ * pool_miss/5s with patched=0 and 4 "captured" 1920-byte buffers in the
+ * pool. Fix round 4 added a sampled descriptor histogram of the buffers
+ * actually bound at VS slot 0 on those missed draws, plus a record of every
+ * constant buffer our CreateBuffer hook ever saw created. The result was
+ * unambiguous:
+ *
+ *   miss-combo[1]: ByteWidth=1920 Usage=0 BindFlags=0x4 CPUAccess=0x0
+ *                  | created-through-our-hook=6261  NEVER-seen=0
+ *
+ * Usage=0 is D3D11_USAGE_DEFAULT and CPUAccess=0 is no CPU access at all.
+ * Two conclusions follow, and they retire two earlier theories outright:
+ *
+ *  1. Our CreateBuffer hook has COMPLETE coverage - every missed buffer,
+ *     across every size class, reported NEVER-seen-by-our-hook=0. There is
+ *     no hook-install timing race and no missed CreateBuffer call. (The
+ *     hooks in fact go live ~450ms after DllMain and ~2.8s before the first
+ *     draw, measured from tewvr.log timestamps.)
+ *  2. The real world cb0 buffers are DEFAULT/no-CPU-access, so they CANNOT
+ *     be Mapped at all. Step 0's option (b) - "Map the buffer once at
+ *     creation and keep the CPU pointer forever" - is not merely suboptimal
+ *     for them, it is impossible. The 1920-byte DYNAMIC buffers rounds 2/3
+ *     were successfully capturing are a same-size decoy set that is never
+ *     bound at slot 0 for a world draw (confirmed disjoint from the five
+ *     1920-byte slot-0 pointers in task6-gameplay-seqdump.log).
+ *
+ * A DEFAULT constant buffer can only be written from the CPU with
+ * UpdateSubresource, so that call is where the live MVP content is
+ * observable. This module now shadows it: Hook_UpdateSubresource copies the
+ * caller's source bytes into our own per-buffer CPU shadow, and the
+ * draw-time path reads the shadow exactly where it used to read the mapped
+ * pointer. Everything downstream (row extraction, K multiply, scratch
+ * buffer, rebind) is unchanged.
+ *
+ * Dropping the foreign Map also removes, by construction, the residual
+ * "the engine's own later Map could conflict with ours" risk that every
+ * previous round had to carry as an open concern.
+ *
+ * MULTI-VTABLE DISPATCH: unlike DrawIndexed/Draw (one shared code address
+ * across every context flavor - seqdump.c's confirmed finding),
+ * UpdateSubresource is in the group seqdump found needs per-vtable
+ * late-hooking (alongside Map/Unmap/VSSetShader/VSSetConstantBuffers).
+ * That is almost certainly why seqdump's own gameplay capture recorded
+ * ZERO UpdateSubresource events despite thousands of world draws: it only
+ * ever hooked the immediate flavor, and the engine issues these updates on
+ * its deferred worker contexts. So this module hooks UpdateSubresource once
+ * on the immediate/dummy vtable at install, and additionally late-hooks it
+ * on each new deferred context vtable the first time that context reaches
+ * our Draw/DrawIndexed detour. Originals are resolved by target ADDRESS
+ * (read back out of the calling context's own vtable slot, which MinHook
+ * leaves untouched since it patches code, not vtables) - the same
+ * address-keyed dispatch seqdump.c uses for exactly this reason. */
+
+#define MVP_UPDATE_TARGETS_MAX 8
+#define MVP_SEEN_CTX_MAX       32
+
+struct UpdateTarget {
+    void *addr;                /* the vtable slot's code address (the MinHook target) */
+    UpdateSubresource_t orig;  /* its trampoline */
+};
+static struct UpdateTarget g_update_targets[MVP_UPDATE_TARGETS_MAX];
+static int g_update_target_count = 0;
+static void *g_seen_ctx[MVP_SEEN_CTX_MAX];
+static int g_seen_ctx_count = 0;
+static CRITICAL_SECTION g_latehook_cs; /* guards g_update_targets[] and g_seen_ctx[] */
+static int g_latehook_cs_ready = 0;
+static int g_seen_ctx_full_warned = 0;
+
+static void STDMETHODCALLTYPE Hook_UpdateSubresource(ID3D11DeviceContext *, ID3D11Resource *, UINT,
+                                                      const D3D11_BOX *, const void *, UINT, UINT);
+
+/* Resolve the trampoline for whichever UpdateSubresource address the
+ * calling context's vtable actually points at. Lock-free read: the table
+ * only ever grows, and each row's `addr` is published last. */
+static UpdateSubresource_t mvp_update_orig_for(ID3D11DeviceContext *ctx) {
+    void *target = (*(void ***)ctx)[VTBL_CTX_UPDATESUBRESOURCE];
+    int i, n = g_update_target_count;
+    for (i = 0; i < n; i++) {
+        if (g_update_targets[i].addr == target) {
+            return g_update_targets[i].orig;
+        }
+    }
+    return NULL;
+}
+
+/* Hooks `target` for UpdateSubresource if that exact address is not hooked
+ * by this module already. Idempotent and address-keyed, so calling it for a
+ * vtable that shares an address with one already covered is a cheap no-op.
+ * Must be called with g_latehook_cs held. Returns 1 if the address is
+ * covered on return (whether by this call or an earlier one). */
+static int mvp_hook_update_target_locked(void *target) {
+    void *orig = NULL;
+    MH_STATUS st;
+    int i;
+
+    if (target == NULL) {
+        return 0;
+    }
+    for (i = 0; i < g_update_target_count; i++) {
+        if (g_update_targets[i].addr == target) {
+            return 1; /* already covered */
+        }
+    }
+    if (g_update_target_count >= MVP_UPDATE_TARGETS_MAX) {
+        return 0;
+    }
+
+    st = MH_CreateHook(target, (void *)&Hook_UpdateSubresource, &orig);
+    if (st != MH_OK || orig == NULL) {
+        log_msg("mvp_patch: MH_CreateHook(UpdateSubresource @ %p) failed: %s", target,
+                 MH_StatusToString(st));
+        return 0;
+    }
+    /* Publish the trampoline BEFORE enabling, so the detour can never run
+     * with no original to call through to (same ordering discipline as
+     * hook_one()). */
+    g_update_targets[g_update_target_count].orig = (UpdateSubresource_t)orig;
+    g_update_targets[g_update_target_count].addr = target;
+    g_update_target_count++;
+
+    st = MH_EnableHook(target);
+    if (st != MH_OK) {
+        g_update_target_count--;
+        g_update_targets[g_update_target_count].addr = NULL;
+        MH_RemoveHook(target);
+        log_msg("mvp_patch: MH_EnableHook(UpdateSubresource @ %p) failed: %s", target,
+                 MH_StatusToString(st));
+        return 0;
+    }
+    log_msg("mvp_patch: UpdateSubresource hooked at %p (target #%d)", target, g_update_target_count - 1);
+    return 1;
+}
+
+/* Called from the Draw/DrawIndexed detours. The first time a given context
+ * pointer is seen, make sure ITS vtable's UpdateSubresource is hooked too.
+ * Cheap after the first call per context (a short locked linear scan);
+ * fail-safe throughout - any failure just leaves that vtable's updates
+ * unshadowed, which degrades to "those draws render unpatched". */
+static void mvp_maybe_late_hook_ctx(ID3D11DeviceContext *ctx) {
+    void **vtbl;
+    int is_new = 0, i;
+
+    if (ctx == NULL || !g_latehook_cs_ready) {
+        return;
+    }
+
+    EnterCriticalSection(&g_latehook_cs);
+    for (i = 0; i < g_seen_ctx_count; i++) {
+        if (g_seen_ctx[i] == (void *)ctx) {
+            break;
+        }
+    }
+    if (i == g_seen_ctx_count) {
+        if (g_seen_ctx_count < MVP_SEEN_CTX_MAX) {
+            g_seen_ctx[g_seen_ctx_count++] = (void *)ctx;
+            is_new = 1;
+        } else if (!g_seen_ctx_full_warned) {
+            g_seen_ctx_full_warned = 1;
+            log_msg("mvp_patch: seen-ctx table full (%d); further unknown contexts won't be "
+                     "inspected for UpdateSubresource late-hooking", MVP_SEEN_CTX_MAX);
+        }
+    }
+    if (is_new) {
+        vtbl = *(void ***)ctx;
+        mvp_hook_update_target_locked(vtbl[VTBL_CTX_UPDATESUBRESOURCE]);
+    }
+    LeaveCriticalSection(&g_latehook_cs);
+}
+
+static void STDMETHODCALLTYPE Hook_UpdateSubresource(ID3D11DeviceContext *ctx, ID3D11Resource *pDstResource,
+                                                      UINT DstSubresource, const D3D11_BOX *pDstBox,
+                                                      const void *pSrcData, UINT SrcRowPitch,
+                                                      UINT SrcDepthPitch) {
+    UpdateSubresource_t orig = mvp_update_orig_for(ctx);
+
+    /* Shadow BEFORE calling through: the engine's source buffer is only
+     * guaranteed valid for the duration of this call. Whole-resource
+     * updates only (pDstBox == NULL) - a partial-box update of a constant
+     * buffer would need offset handling this mechanism has never observed
+     * and must not guess at. */
+    if (pSrcData != NULL && DstSubresource == 0 && pDstBox == NULL && g_direct_pool_count > 0) {
+        int i, n = g_direct_pool_count;
+        for (i = 0; i < n; i++) {
+            if (g_direct_pool[i].buf == (ID3D11Buffer *)pDstResource) {
+                UINT bytes = g_direct_pool[i].byte_width;
+                if (bytes > MVP_CB_BYTES) {
+                    bytes = MVP_CB_BYTES;
+                }
+                memcpy(g_shadow[i], pSrcData, bytes);
+                InterlockedExchange(&g_shadow_valid[i], 1); /* publish AFTER the copy */
+                InterlockedIncrement(&g_shadow_writes);
+                break;
+            }
+        }
+    }
+
+    if (orig == NULL) {
+        /* Unreachable in practice (every address we hook is published into
+         * g_update_targets before its hook is enabled). Returning without
+         * calling through would silently drop a real resource update, which
+         * is far worse than the cost of one rate-limited complaint, so log
+         * and drop only as an absolute last resort - there is no safe
+         * "guess which original" here. */
+        if (mvp_rate_limit_should_fire(&g_update_bug_log_count)) {
+            log_msg("mvp_patch: BUG - no UpdateSubresource original for ctx=%p vtbl=%p; call dropped",
+                     (void *)ctx, (void *)*(void ***)ctx);
+        }
+        return;
+    }
+    orig(ctx, pDstResource, DstSubresource, pDstBox, pSrcData, SrcRowPitch, SrcDepthPitch);
 }
 
 /* ================= per-thread scratch-ring allocation ================= */
@@ -679,7 +1158,17 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
          * something other than what CreateBuffer captured - logged once,
          * in full, the first time it happens, so a re-round-trip isn't
          * needed to see what that buffer actually looks like. */
+        UINT tick;
         InterlockedIncrement(&g_diag_pool_miss);
+        tick = (UINT)InterlockedIncrement(&g_miss_sample_tick);
+        if ((tick & MVP_REGISTER_PROBE_MASK) == 0) {
+            /* Fix round 4b: this is where world cb0 buffers get into the
+             * pool - see mvp_try_register_bound_buffer(). */
+            mvp_try_register_bound_buffer(buf);
+        }
+        if ((tick & MVP_MISS_SAMPLE_MASK) == 0) {
+            mvp_miss_sample(buf); /* fix round 4: what IS this buffer, and did our hook see it created? */
+        }
         if (InterlockedCompareExchange(&g_pool_miss_first_logged, 1, 0) == 0) {
             D3D11_BUFFER_DESC bd;
             memset(&bd, 0, sizeof(bd));
@@ -808,6 +1297,12 @@ static void STDMETHODCALLTYPE Hook_DrawIndexed(ID3D11DeviceContext *ctx, UINT In
         return; /* should never happen once installed */
     }
 
+    /* Fix round 4: DrawIndexed/Draw share one code address across every
+     * context flavor, so they are the only place a deferred context is
+     * guaranteed to reach us - use that to late-hook ITS vtable's
+     * UpdateSubresource. Cheap after the first call per context. */
+    mvp_maybe_late_hook_ctx(ctx);
+
     patched = mvp_patch_prepare(ctx, &orig_buf);
 
     orig(ctx, IndexCount, StartIndexLocation, BaseVertexLocation);
@@ -827,6 +1322,8 @@ static void STDMETHODCALLTYPE Hook_Draw(ID3D11DeviceContext *ctx, UINT VertexCou
     if (orig == NULL) {
         return;
     }
+
+    mvp_maybe_late_hook_ctx(ctx); /* see Hook_DrawIndexed */
 
     patched = mvp_patch_prepare(ctx, &orig_buf);
 
@@ -850,14 +1347,25 @@ static HRESULT STDMETHODCALLTYPE Hook_CreateBuffer(ID3D11Device *dev, const D3D1
 
     hr = orig(dev, pDesc, pInitialData, ppBuffer);
 
+    InterlockedIncrement(&g_cb_create_total);
     if (SUCCEEDED(hr) && ppBuffer != NULL && *ppBuffer != NULL && pDesc != NULL &&
-        (pDesc->BindFlags & D3D11_BIND_CONSTANT_BUFFER) &&
-        pDesc->Usage == D3D11_USAGE_DYNAMIC &&
-        (pDesc->CPUAccessFlags & D3D11_CPU_ACCESS_WRITE) &&
-        pDesc->ByteWidth >= MVP_POOL_BUF_MIN_BYTES && pDesc->ByteWidth <= MVP_POOL_BUF_MAX_BYTES) {
-        mvp_direct_pool_try_capture(dev, *ppBuffer, pDesc->ByteWidth);
+        (pDesc->BindFlags & D3D11_BIND_CONSTANT_BUFFER)) {
+        /* fix round 4 diagnostic: remember EVERY constant buffer our hook
+         * sees created, regardless of whether the capture filter accepts
+         * it, so a later pool-miss can tell "filter rejected it" apart from
+         * "our hook never saw it at all". */
+        InterlockedIncrement(&g_cb_create_const);
+        mvp_seen_cb_record(*ppBuffer, pDesc);
     }
 
+    /* FIX ROUND 4b: this hook NO LONGER registers anything into the world
+     * cb0 pool. Descriptor-only classification at creation time could not
+     * distinguish the real pool from same-shaped decoys (it failed that way
+     * in rounds 1, 2 and 4a), so registration moved to the draw path, where
+     * "bound at VS slot 0 for a draw with a usable mvpmatrix" is available
+     * as the actual criterion - see mvp_try_register_bound_buffer(). What
+     * remains here is purely the diagnostic bookkeeping above, which is
+     * what proved the hook's coverage is complete. */
     return hr;
 }
 
@@ -866,7 +1374,7 @@ static HRESULT STDMETHODCALLTYPE Hook_CreateBuffer(ID3D11Device *dev, const D3D1
 void mvp_patch_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx) {
     void **ctx_vtbl;
     void **dev_vtbl;
-    int ok_di, ok_d, ok_cb;
+    int ok_di, ok_d, ok_cb, ok_us;
     char flagbuf[32];
     DWORD len;
     float deg;
@@ -889,6 +1397,8 @@ void mvp_patch_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx) 
     g_direct_pool_cs_ready = 1;
     InitializeCriticalSection(&g_scratch_init_cs);
     g_scratch_init_cs_ready = 1;
+    InitializeCriticalSection(&g_latehook_cs);
+    g_latehook_cs_ready = 1;
 
     g_tls_index = TlsAlloc();
     if (g_tls_index == TLS_OUT_OF_INDEXES) {
@@ -898,6 +1408,8 @@ void mvp_patch_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx) 
         g_direct_pool_cs_ready = 0;
         DeleteCriticalSection(&g_scratch_init_cs);
         g_scratch_init_cs_ready = 0;
+        DeleteCriticalSection(&g_latehook_cs);
+        g_latehook_cs_ready = 0;
         return;
     }
 
@@ -910,6 +1422,14 @@ void mvp_patch_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx) 
                      "mvp_patch ID3D11DeviceContext::Draw");
     ok_cb = hook_one(dev_vtbl[VTBL_DEV_CREATEBUFFER], (void *)&Hook_CreateBuffer, (void **)&g_createbuffer_orig,
                       "mvp_patch ID3D11Device::CreateBuffer");
+
+    /* Fix round 4: the immediate/dummy flavor's UpdateSubresource. Deferred
+     * contexts get theirs late-hooked on their first draw (see
+     * mvp_maybe_late_hook_ctx) - this one covers the immediate context and
+     * any deferred flavor that happens to share its address. */
+    EnterCriticalSection(&g_latehook_cs);
+    ok_us = mvp_hook_update_target_locked(ctx_vtbl[VTBL_CTX_UPDATESUBRESOURCE]);
+    LeaveCriticalSection(&g_latehook_cs);
 
     if ((!ok_di && !ok_d) || !ok_cb) {
         /* Without CreateBuffer, the direct pool can never be populated, so
@@ -924,6 +1444,8 @@ void mvp_patch_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx) 
         g_direct_pool_cs_ready = 0;
         DeleteCriticalSection(&g_scratch_init_cs);
         g_scratch_init_cs_ready = 0;
+        DeleteCriticalSection(&g_latehook_cs);
+        g_latehook_cs_ready = 0;
         return;
     }
 
@@ -943,9 +1465,12 @@ void mvp_patch_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx) 
     }
 
     g_installed = 1;
-    log_msg("mvp_patch: installed (DrawIndexed=%d Draw=%d CreateBuffer=%d); world cb0 buffers "
-             "are captured (persistently Mapped) as CreateBuffer creates them; scratch pool "
-             "created lazily on the first patchable draw", ok_di, ok_d, ok_cb);
+    log_msg("mvp_patch: installed (DrawIndexed=%d Draw=%d CreateBuffer=%d UpdateSubresource=%d); "
+             "world cb0 buffers (%d-%d bytes, DEFAULT/no-CPU-access) are registered as CreateBuffer "
+             "creates them and shadowed on every UpdateSubresource; deferred contexts get their own "
+             "UpdateSubresource late-hooked on their first draw; scratch pool created lazily on the "
+             "first patchable draw",
+             ok_di, ok_d, ok_cb, ok_us, MVP_POOL_BUF_MIN_BYTES, MVP_POOL_BUF_MAX_BYTES);
 }
 
 void mvp_patch_remove(void) {
@@ -955,12 +1480,12 @@ void mvp_patch_remove(void) {
         EnterCriticalSection(&g_direct_pool_cs);
         for (i = 0; i < g_direct_pool_count; i++) {
             if (g_direct_pool[i].buf != NULL) {
-                /* Unmap is deliberately NOT called - mirrors the engine's
-                 * own apparent pattern (Map once, never Unmap) and would
-                 * be pointless here anyway: the buffer is about to be
-                 * released. */
+                /* Fix round 4: nothing to Unmap any more - this module no
+                 * longer Maps the engine's buffers at all, it shadows their
+                 * UpdateSubresource writes into its own memory. */
                 ID3D11Buffer_Release(g_direct_pool[i].buf);
                 g_direct_pool[i].buf = NULL;
+                InterlockedExchange(&g_shadow_valid[i], 0);
             }
         }
         g_direct_pool_count = 0;
@@ -982,6 +1507,15 @@ void mvp_patch_remove(void) {
         DeleteCriticalSection(&g_scratch_init_cs);
         g_scratch_init_cs_ready = 0;
     }
+    if (g_latehook_cs_ready) {
+        /* Cleared before the CS goes away so no in-flight detour can start
+         * a late-hook pass against a deleted critical section. */
+        g_latehook_cs_ready = 0;
+        DeleteCriticalSection(&g_latehook_cs);
+    }
+    g_update_target_count = 0;
+    g_seen_ctx_count = 0;
+    g_seen_ctx_full_warned = 0;
 
     if (g_tls_index != TLS_OUT_OF_INDEXES) {
         TlsFree(g_tls_index);
