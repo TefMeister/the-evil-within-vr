@@ -21,6 +21,19 @@ The blow-by-blow development history lives in the sibling repositories
 (`-dev-archive` for the messy in-progress record, `-modding-notes` for readable
 field notes). This repo is the consolidated engine knowledge, not the diary.
 
+## The five repositories for The Evil Within VR
+
+Everything for this game lives in five repositories, each with one job — so you
+always know where to look. You are in **the-evil-within-vr-engine-research**.
+
+| Repository | What lives here |
+| --- | --- |
+| [the-evil-within-vr-mod](https://github.com/TefMeister/the-evil-within-vr-mod) | The mod itself — a `winmm.dll` proxy driving stereo via D3D11 hooks (pre-release; source). |
+| [the-evil-within-vr-dev-archive](https://github.com/TefMeister/the-evil-within-vr-dev-archive) | Full development history — snapshots, probes, dead ends, raw recon. |
+| [the-evil-within-vr-modding-notes](https://github.com/TefMeister/the-evil-within-vr-modding-notes) | Readable field notes / progress ledger. |
+| [the-evil-within-vr-staging](https://github.com/TefMeister/the-evil-within-vr-staging) 🔒 | **Private** — unverified WIP builds, cross-machine handoff. |
+| **the-evil-within-vr-engine-research** ← you are here | Distilled engine reference (dossier) + reusable VR RE playbook. |
+
 ## Status
 
 Engine model largely built; the camera transform is fully located and the
