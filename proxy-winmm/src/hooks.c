@@ -9,6 +9,7 @@
 #include "shaderdump.h"
 #include "seqdump.h"
 #include "mvp_patch.h"
+#include "framecapture.h"
 
 Present_t g_present_orig = NULL;
 
@@ -31,6 +32,10 @@ static HRESULT STDMETHODCALLTYPE Hook_Present(IDXGISwapChain *sc, UINT sync, UIN
      * hooks installed successfully. Drives the "arm 300 frames after the
      * first Present" logic and emits the PRESENT frame-boundary marker. */
     seqdump_on_present(g_frame);
+
+    /* SPIKE (2026-08-21, not yet reviewed): TEWVR_FRAMECAPTURE=1 back-buffer
+     * capture-to-disk, file-triggered via capture.txt. See framecapture.h. */
+    framecapture_on_present(g_frame);
 
     return g_present_orig(sc, sync, flags);
 }
