@@ -1,6 +1,16 @@
 # Status
 
-**Last updated: 2026-08-20 (session 4) — Task 6 discovery SOLVED: we found where the world's position matrix lives, and it's readable right when we need it.**
+**Last updated: 2026-08-21 — WE CAN MOVE THE CAMERA. This is the big one.**
+
+The single question the whole VR conversion hinged on — can we actually take
+control of the game's camera and prove it — is answered: yes. It took three
+wrong turns (two of them expensive) before landing on the real mechanism, and
+we proved it with a genuinely convincing test rather than just "it looked
+different." Full story in
+[10-we-can-move-the-camera.md](10-we-can-move-the-camera.md). Next: turn this
+rough proof-of-control into the real per-eye camera maths for actual stereo.
+
+**Previously (2026-08-20, session 4) — Task 6 discovery SOLVED: we found where the world's position matrix lives, and it's readable right when we need it.**
 
 The last mystery is gone. Each object's position matrix lives in a small set of
 buffers (six of them) that the game keeps permanently open and pokes new numbers
