@@ -1,4 +1,4 @@
-#include "mvp_patch.h"
+﻿#include "mvp_patch.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -225,6 +225,29 @@ typedef void(STDMETHODCALLTYPE *UpdateSubresource_t)(ID3D11DeviceContext *, ID3D
 #define MVP_POOL_BUF_MIN_BYTES 1856
 #define MVP_POOL_BUF_MAX_BYTES 1984
 
+/* FIX ROUND 5, finding #3: make the band's relationship to the scratch
+ * window a CHECKED invariant rather than a coincidence.
+ *
+ * mvp_patch_prepare() binds a scratch buffer of MVP_CB_BYTES *in place of*
+ * the engine's own cb0. If a registered buffer were ever larger than the
+ * scratch buffer, the bytes past MVP_CB_BYTES would read as zero in the
+ * shader - silently zeroing real per-object constants on every patched
+ * draw. That is exactly the bug fix round 4 found (MVP_CB_BYTES was 512
+ * against a 1920-byte cb0), and right now the ONLY thing preventing its
+ * return is that 1984 happens to be less than 2048 - while the comment
+ * directly above actively invites widening the band on future evidence.
+ *
+ * This static assertion makes that a build error instead of a silent
+ * rendering corruption. If you widen MVP_POOL_BUF_MAX_BYTES past
+ * MVP_CB_BYTES, you MUST raise MVP_CB_BYTES to match (and keep it a
+ * multiple of 16). Implemented as a negative-array-size typedef so it works
+ * on this C89/C99-era toolchain without <assert.h> or _Static_assert. */
+typedef char mvp_assert_scratch_covers_pool_band[
+    (MVP_POOL_BUF_MAX_BYTES <= MVP_CB_BYTES) ? 1 : -1];
+/* Constant buffers must also be a multiple of 16 bytes. */
+typedef char mvp_assert_cb_bytes_is_16_aligned[
+    ((MVP_CB_BYTES % 16) == 0) ? 1 : -1];
+
 /* Distinct candidate buffer identities this module will ever try to
  * persistently map. Task 5/6 discovery observed ~6 for the specific world
  * MVP pool (one per deferred worker thread). Fix round 1 sized this
@@ -339,6 +362,11 @@ static int g_direct_pool_count;
 static int g_update_target_count;
 static volatile LONG g_shadow_writes;
 static volatile LONG g_diag_shadow_empty;
+static volatile LONG g_diag_shadow_partial;
+static volatile LONG g_diag_shadow_multiwriter;
+static volatile LONG g_diag_latehook_after_valid;
+static volatile LONG g_diag_shadow_concurrent;
+static volatile LONG g_diag_shadow_torn;
 
 #define MVP_SEEN_CB_MAX      2048
 #define MVP_MISS_COMBO_MAX   24
@@ -441,9 +469,13 @@ static void mvp_diag_report_misses(void) {
     }
     log_msg("mvp_patch: DIAG CreateBuffer coverage: total_calls_seen=%ld of which constant_buffers=%ld "
              "(recorded identities=%ld, cap %d); world cb0 pool holds %d; UpdateSubresource targets "
-             "hooked=%d, shadow writes=%ld, draws skipped for an empty shadow=%ld",
+             "hooked=%d, shadow writes=%ld (partial-box=%ld), draws skipped for an empty shadow=%ld, "
+             "cross-thread shadow writes=%ld, CONCURRENT shadow writes=%ld, draws skipped for a torn "
+             "shadow=%ld, late-hooks after a shadow was already valid=%ld",
              g_cb_create_total, g_cb_create_const, g_seen_cb_count, MVP_SEEN_CB_MAX, g_direct_pool_count,
-             g_update_target_count, g_shadow_writes, g_diag_shadow_empty);
+             g_update_target_count, g_shadow_writes, g_diag_shadow_partial, g_diag_shadow_empty,
+             g_diag_shadow_multiwriter, g_diag_shadow_concurrent, g_diag_shadow_torn,
+             g_diag_latehook_after_valid);
     for (i = 0; i < n; i++) {
         log_msg("mvp_patch: DIAG miss-combo[%ld]: ByteWidth=%u Usage=%u BindFlags=0x%X CPUAccess=0x%X "
                  "| sampled misses: created-through-our-hook=%ld NEVER-seen-by-our-hook=%ld",
@@ -544,9 +576,76 @@ struct DirectPoolEntry {
 };
 
 /* Fix round 4: CPU shadow storage, one MVP_CB_BYTES window per pool slot.
- * Statically allocated (32KB total at the current caps) so registration
- * needs no allocator and can never fail for lack of memory. */
+ * Statically allocated (64KB total at the current caps: 32 slots x 2048B)
+ * so registration needs no allocator and can never fail for lack of memory.
+ *
+ * ===== LOAD-BEARING PRECONDITION (fix round 5, finding #4) =====
+ *
+ * Each shadow slot is a single flat buffer with NO lock, NO seqlock and NO
+ * per-context keying. That is correct ONLY under this precondition:
+ *
+ *     each world cb0 buffer identity is written (UpdateSubresource) and
+ *     read (draw) by exactly ONE thread.
+ *
+ * The evidence for it is good but circumstantial: the engine allocates one
+ * world cb0 per deferred worker thread (6 buffers observed, registered from
+ * 5-6 distinct thread ids, each worker recording into its own context), so
+ * in practice slot i only ever belongs to one worker. It has never been
+ * enforced, and until this comment it was never even stated.
+ *
+ * If the precondition is ever violated, the failure mode is NOT a benign
+ * skip: a draw could read a TORN shadow (half of update N, half of N+1) or
+ * another thread's MVP, and APPLY it - a wrong-data path, which is exactly
+ * what this module's fail-safe rule forbids. It would also be invisible,
+ * because nothing here would notice.
+ *
+ * Rather than pay a lock on a path that runs ~110k times/second, this is
+ * DETECTED cheaply instead: the first writer's thread id is recorded per
+ * slot, and a later write from a different thread raises a one-shot
+ * warning (see mvp_shadow_note_writer). That is a per-write integer compare
+ * against a value that is almost always already in cache - and if the
+ * warning ever fires, the precondition above is broken and this shadow
+ * needs real synchronisation (a seqlock or per-context shadows) before
+ * anything else in the module can be trusted. */
 static unsigned char g_shadow[MVP_DIRECT_POOL_MAX][MVP_CB_BYTES];
+/* Thread id of the first writer of each shadow slot (0 = none yet), and a
+ * one-shot gate so the cross-thread warning cannot spam the log. */
+static volatile LONG g_shadow_writer_tid[MVP_DIRECT_POOL_MAX];
+static volatile LONG g_shadow_multiwriter_warned = 0;
+static volatile LONG g_diag_shadow_multiwriter = 0; /* writes seen from a second thread */
+
+/* ===== per-slot seqlock (fix round 5, added after the precondition above
+ * was MEASURED to be false) =====
+ *
+ * The very first run carrying the finding-#4 detector reported 448,201
+ * cross-thread writes out of 560,109 - ~80% of world cb0 updates come from
+ * a thread other than that slot's first writer. The single-writer
+ * precondition is not merely unproven, it is FALSE: the engine's worker
+ * threads share these buffers.
+ *
+ * That makes an unsynchronised shadow a live wrong-data hazard rather than
+ * a theoretical one, so the READER is now protected by a per-slot seqlock:
+ * the writer makes the counter odd before its memcpy and even after, and
+ * the reader re-reads it around its own copy and REFUSES to patch if the
+ * value was odd or changed across the copy. A racing draw therefore skips
+ * (the fail-safe path) instead of applying a torn matrix.
+ *
+ * The parity of the writer's own increment is free extra information: if
+ * incrementing yields an EVEN value the counter was already odd, meaning
+ * another writer was inside its memcpy at that instant - genuine
+ * write/write concurrency, as opposed to threads merely taking turns across
+ * frames. That distinction decides whether writer/writer exclusion (a real
+ * per-slot lock) is needed on top of this, so it is counted rather than
+ * assumed either way.
+ *
+ * IMPORTANT: a seqlock alone does NOT make concurrent WRITERS safe - it
+ * only guarantees the reader never consumes a torn snapshot. If
+ * g_diag_shadow_concurrent is ever non-zero, writer/writer exclusion is
+ * still required and this is not finished. */
+static volatile LONG g_shadow_seq[MVP_DIRECT_POOL_MAX];
+static volatile LONG g_diag_shadow_concurrent = 0; /* a writer found another writer mid-copy */
+static volatile LONG g_diag_shadow_torn = 0;       /* draws skipped: seqlock reported an unstable read */
+static volatile LONG g_shadow_concurrent_warned = 0;
 /* 0 until Hook_UpdateSubresource has written real content into that slot's
  * shadow. mvp_direct_pool_find() refuses to hand out a not-yet-written
  * shadow: patching a draw from an all-zero shadow would apply a confidently
@@ -554,6 +653,13 @@ static unsigned char g_shadow[MVP_DIRECT_POOL_MAX][MVP_CB_BYTES];
 static volatile LONG g_shadow_valid[MVP_DIRECT_POOL_MAX];
 static volatile LONG g_shadow_writes = 0;   /* UpdateSubresource calls that fed a pool shadow */
 static volatile LONG g_diag_shadow_empty = 0; /* draws skipped because the shadow had no content yet */
+static volatile LONG g_diag_shadow_partial = 0; /* partial-box (offset) shadow updates handled */
+/* Fix round 5, finding #5: counts contexts whose UpdateSubresource hook went
+ * live only AFTER some shadow was already valid - the window in which that
+ * context's earlier updates were missed, leaving a shadow STALE (not empty),
+ * which is a wrong-data path rather than a skip path. See the note in
+ * mvp_maybe_late_hook_ctx(). */
+static volatile LONG g_diag_latehook_after_valid = 0;
 static struct DirectPoolEntry g_direct_pool[MVP_DIRECT_POOL_MAX];
 static int g_direct_pool_count = 0; /* forward-declared above for the round-4 diagnostics */
 static int g_direct_pool_full_warned = 0;
@@ -665,7 +771,7 @@ static int hook_one(void *target, void *detour, void **out_orig, const char *nam
  * concurrent capture can only ever see a benign miss (a not-yet-published
  * slot's `buf` still reads NULL, which never equals a real buffer
  * pointer), never a torn/inconsistent read. */
-static void *mvp_direct_pool_find(ID3D11Buffer *buf, UINT *out_byte_width) {
+static int mvp_direct_pool_find(ID3D11Buffer *buf, UINT *out_byte_width) {
     int i, n;
     n = g_direct_pool_count;
     for (i = 0; i < n; i++) {
@@ -675,31 +781,60 @@ static void *mvp_direct_pool_find(ID3D11Buffer *buf, UINT *out_byte_width) {
                  * any content - fall through unpatched rather than patch
                  * from an all-zero shadow (fix round 4). */
                 InterlockedIncrement(&g_diag_shadow_empty);
-                return NULL;
+                return -1;
             }
             *out_byte_width = g_direct_pool[i].byte_width;
-            return g_direct_pool[i].cpu_ptr;
+            return i; /* fix round 5: the SLOT, so the caller can seqlock the read */
         }
     }
-    return NULL;
+    return -1;
 }
 
-/* Called from Hook_CreateBuffer for every buffer matching the world-pool
- * filter. Reserves a slot (locked, so two concurrent CreateBuffer calls
- * can never collide on the same index), then - unlocked - gets `dev`'s own
- * immediate context and issues our own Map(WRITE_DISCARD), keeping the
- * pointer forever (never Unmapped, mirroring the engine's own apparent
- * pattern - see file header). On ANY failure, logs and leaves the slot
- * unfilled (buf stays NULL forever - a small, bounded, accepted waste of
- * one slot, not a correctness issue: mvp_direct_pool_find() simply never
- * matches it). Never crashes, never blocks a draw. */
+/* Seqlock read side (fix round 5). Copies `bytes` from shadow slot `slot`
+ * into `dst`, returning 1 only if no writer touched that slot at any point
+ * during the copy. Returns 0 on a racing write - the caller MUST then fall
+ * through unpatched, which is the fail-safe path: a torn MVP applied to a
+ * draw is exactly the outcome this module forbids. */
+static int mvp_shadow_read(int slot, void *dst, UINT bytes) {
+    LONG s0, s1;
+
+    s0 = g_shadow_seq[slot];
+    if (s0 & 1) {
+        return 0; /* a writer is mid-copy right now */
+    }
+    memcpy(dst, g_shadow[slot], bytes);
+    /* InterlockedCompareExchange as an acquire fence: on x86/x64 loads are
+     * not reordered with loads, but this also stops the COMPILER hoisting
+     * the second read above the memcpy. */
+    s1 = InterlockedCompareExchange(&g_shadow_seq[slot], s0, s0);
+    return (s0 == s1);
+}
+
+/* Registers one world cb0 buffer identity: reserves a slot (locked, so two
+ * concurrent registrations can never collide on the same index), takes our
+ * own AddRef on the buffer, and points the slot at its zeroed CPU shadow.
+ * The shadow stays invalid until Hook_UpdateSubresource first fills it.
+ * Since fix round 4b this is called from the DRAW path, not from
+ * Hook_CreateBuffer. Never crashes, never blocks a draw. */
 static void mvp_direct_pool_try_capture(ID3D11Buffer *buf, UINT byte_width) {
     int idx, i;
 
     EnterCriticalSection(&g_direct_pool_cs);
     /* Dedupe: this is now called repeatedly from the draw path (see
      * mvp_try_register_bound_buffer), so the same buffer will be offered
-     * many times before and after it is registered. */
+     * many times before and after it is registered.
+     *
+     * Known benign publish window (fix round 5, minor - flagged, not fixed):
+     * the dedupe scan reads g_direct_pool[i].buf, which the registering
+     * thread writes LAST, outside this lock. Two threads offering the same
+     * buffer within that window can both pass the scan and register it
+     * twice. Impact is bounded and harmless: one wasted slot, and the two
+     * entries hold identical content (both shadows are fed by the same
+     * UpdateSubresource calls). Fixing it properly means moving the slot
+     * publish inside the lock, which is easy but touches the lock-free read
+     * path's invariants; deferred to the whole-branch review rather than
+     * changed at the same time as the round-5 fixes. It did not occur in
+     * any observed run (all 6 buffers registered exactly once). */
     for (i = 0; i < g_direct_pool_count; i++) {
         if (g_direct_pool[i].buf == buf) {
             LeaveCriticalSection(&g_direct_pool_cs);
@@ -843,6 +978,15 @@ static void mvp_try_register_bound_buffer(ID3D11Buffer *buf) {
  * leaves untouched since it patches code, not vtables) - the same
  * address-keyed dispatch seqdump.c uses for exactly this reason. */
 
+/* KNOWN GAP (fix round 5, minor - flagged, not fixed): only
+ * ID3D11DeviceContext::UpdateSubresource (vtable 48) is hooked.
+ * ID3D11DeviceContext1::UpdateSubresource1 (a separate, later vtable slot)
+ * is NOT. If the engine ever routed a world cb0 update through the "1"
+ * variant, that update would be missed and the shadow would go stale. No
+ * evidence it does - the measured shadow-write volume (550k+ per session)
+ * accounts for the observed update traffic, and this engine's context usage
+ * is plain ID3D11DeviceContext throughout - but the gap is unremarked
+ * elsewhere, so it is recorded here. */
 #define MVP_UPDATE_TARGETS_MAX 8
 #define MVP_SEEN_CTX_MAX       32
 
@@ -853,8 +997,11 @@ struct UpdateTarget {
 static struct UpdateTarget g_update_targets[MVP_UPDATE_TARGETS_MAX];
 static int g_update_target_count = 0;
 static void *g_seen_ctx[MVP_SEEN_CTX_MAX];
-static int g_seen_ctx_count = 0;
-static CRITICAL_SECTION g_latehook_cs; /* guards g_update_targets[] and g_seen_ctx[] */
+/* Append-only; read lock-free on the draw hot path, appended only under
+ * g_latehook_cs. Volatile because the fast-path scan reads it without the
+ * lock - see mvp_maybe_late_hook_ctx(). */
+static volatile LONG g_seen_ctx_count = 0;
+static CRITICAL_SECTION g_latehook_cs; /* guards APPENDS to g_update_targets[]/g_seen_ctx[] only */
 static int g_latehook_cs_ready = 0;
 static int g_seen_ctx_full_warned = 0;
 
@@ -923,40 +1070,133 @@ static int mvp_hook_update_target_locked(void *target) {
     return 1;
 }
 
-/* Called from the Draw/DrawIndexed detours. The first time a given context
- * pointer is seen, make sure ITS vtable's UpdateSubresource is hooked too.
- * Cheap after the first call per context (a short locked linear scan);
- * fail-safe throughout - any failure just leaves that vtable's updates
- * unshadowed, which degrades to "those draws render unpatched". */
+/* Called from the Draw/DrawIndexed detours - i.e. from the single hottest
+ * function in the renderer, ~74,000 times per second across ~7 concurrent
+ * recording threads. The first time a given context pointer is seen, make
+ * sure ITS vtable's UpdateSubresource is hooked too.
+ *
+ * FIX ROUND 5, finding #1: this used to take g_latehook_cs unconditionally,
+ * on every single draw. That funnelled all ~74k calls/s from all 7 threads
+ * through ONE global lock, serialising the exact deferred-recording
+ * parallelism the engine goes out of its way to provide - in the hot path,
+ * to protect a table that is written at most ~7 times in a whole session.
+ * The earlier comment costed the linear scan and simply missed the lock.
+ *
+ * Now: a lock-free fast-path scan, with the lock taken ONLY on a genuine
+ * miss (the first sighting of a new context). This is safe because
+ * g_seen_ctx[] is strictly append-only for the life of the module and each
+ * entry is fully written before g_seen_ctx_count is advanced to publish it
+ * (see below) - so a racing reader either does not see a slot at all, or
+ * sees it complete. It never sees a torn or half-published entry. A reader
+ * that races an in-progress append can at worst miss a context that another
+ * thread is registering right now, and then take the slow path itself,
+ * where the locked re-check makes the operation idempotent. */
 static void mvp_maybe_late_hook_ctx(ID3D11DeviceContext *ctx) {
     void **vtbl;
-    int is_new = 0, i;
+    LONG i, n;
 
     if (ctx == NULL || !g_latehook_cs_ready) {
         return;
     }
 
-    EnterCriticalSection(&g_latehook_cs);
-    for (i = 0; i < g_seen_ctx_count; i++) {
+    /* ---- lock-free fast path: the overwhelmingly common case ---- */
+    n = g_seen_ctx_count;
+    for (i = 0; i < n; i++) {
         if (g_seen_ctx[i] == (void *)ctx) {
-            break;
+            return; /* already inspected - no lock, no work */
         }
     }
-    if (i == g_seen_ctx_count) {
-        if (g_seen_ctx_count < MVP_SEEN_CTX_MAX) {
-            g_seen_ctx[g_seen_ctx_count++] = (void *)ctx;
-            is_new = 1;
-        } else if (!g_seen_ctx_full_warned) {
+
+    /* ---- slow path: first sighting of this context (at most ~7 per session) ---- */
+    EnterCriticalSection(&g_latehook_cs);
+    /* Re-check under the lock: another thread may have registered this same
+     * context between our fast-path scan and acquiring the lock. */
+    for (i = 0; i < g_seen_ctx_count; i++) {
+        if (g_seen_ctx[i] == (void *)ctx) {
+            LeaveCriticalSection(&g_latehook_cs);
+            return;
+        }
+    }
+    if (g_seen_ctx_count >= MVP_SEEN_CTX_MAX) {
+        if (!g_seen_ctx_full_warned) {
             g_seen_ctx_full_warned = 1;
             log_msg("mvp_patch: seen-ctx table full (%d); further unknown contexts won't be "
                      "inspected for UpdateSubresource late-hooking", MVP_SEEN_CTX_MAX);
         }
+        LeaveCriticalSection(&g_latehook_cs);
+        return;
     }
-    if (is_new) {
-        vtbl = *(void ***)ctx;
-        mvp_hook_update_target_locked(vtbl[VTBL_CTX_UPDATESUBRESOURCE]);
+
+    /* FIX ROUND 5, finding #5: detect the stale-shadow window.
+     *
+     * This context is drawing for the first time, which is only NOW causing
+     * its vtable's UpdateSubresource to be hooked. Any UpdateSubresource
+     * this context issued before this moment was missed. If some shadow is
+     * ALREADY valid, a missed update means that shadow is STALE rather than
+     * empty - and a stale shadow is patched from, using old data. That is a
+     * wrong-data path, not the fail-safe skip path the empty-shadow guard
+     * provides (the round-4 report described this window incorrectly). It is
+     * narrow and transient (it can only happen in the level-start window,
+     * before each worker's first draw) but it is not nothing, so count it. */
+    {
+        int s;
+        for (s = 0; s < g_direct_pool_count; s++) {
+            if (g_shadow_valid[s]) {
+                InterlockedIncrement(&g_diag_latehook_after_valid);
+                log_msg("mvp_patch: NOTE - context %p had its UpdateSubresource hooked only on its "
+                         "first draw, while %d world cb0 shadow(s) were already valid. Any update "
+                         "this context issued before now was missed, so a shadow may be STALE (old "
+                         "data, still patched from) rather than empty for a frame or two.",
+                         (void *)ctx, g_direct_pool_count);
+                break;
+            }
+        }
     }
+
+    /* Hook FIRST, then publish. If we published the context before hooking,
+     * another thread's fast-path scan could see this context as "already
+     * inspected" while its UpdateSubresource hook was not yet live. */
+    vtbl = *(void ***)ctx;
+    mvp_hook_update_target_locked(vtbl[VTBL_CTX_UPDATESUBRESOURCE]);
+
+    g_seen_ctx[g_seen_ctx_count] = (void *)ctx;
+    /* Publish by advancing the count only after the slot is fully written -
+     * this is what makes the lock-free fast-path scan above valid. The
+     * InterlockedIncrement is used for its release semantics, not for
+     * mutual exclusion (we already hold the lock). */
+    InterlockedIncrement(&g_seen_ctx_count);
     LeaveCriticalSection(&g_latehook_cs);
+}
+
+/* Fix round 5, finding #4: cheap single-writer verification for a shadow
+ * slot. Records the first writing thread; if a LATER write to the same slot
+ * comes from a different thread, the load-bearing precondition documented
+ * at g_shadow's declaration is broken - raise a one-shot warning (and keep
+ * a counter) so it can never happen silently. Cost on the hot path: one
+ * cached read plus a compare in the common case. */
+static void mvp_shadow_note_writer(int slot) {
+    LONG me = (LONG)GetCurrentThreadId();
+    LONG prev = g_shadow_writer_tid[slot];
+
+    if (prev == me) {
+        return; /* overwhelmingly the common case */
+    }
+    if (prev == 0) {
+        /* First writer wins; a genuine tie here is itself a violation, and
+         * the loser falls through to the warning below on its next write. */
+        if (InterlockedCompareExchange(&g_shadow_writer_tid[slot], me, 0) == 0) {
+            return;
+        }
+    }
+    InterlockedIncrement(&g_diag_shadow_multiwriter);
+    if (InterlockedCompareExchange(&g_shadow_multiwriter_warned, 1, 0) == 0) {
+        log_msg("mvp_patch: WARNING - world cb0 shadow slot %d was written by thread %lu after "
+                 "thread %lu. The unsynchronised single-writer precondition documented at g_shadow "
+                 "is BROKEN: a draw can now read a torn or foreign MVP and APPLY it. This shadow "
+                 "needs real synchronisation (seqlock or per-context shadows) before the patched "
+                 "output can be trusted.",
+                 slot, (unsigned long)me, (unsigned long)g_shadow_writer_tid[slot]);
+    }
 }
 
 static void STDMETHODCALLTYPE Hook_UpdateSubresource(ID3D11DeviceContext *ctx, ID3D11Resource *pDstResource,
@@ -966,20 +1206,74 @@ static void STDMETHODCALLTYPE Hook_UpdateSubresource(ID3D11DeviceContext *ctx, I
     UpdateSubresource_t orig = mvp_update_orig_for(ctx);
 
     /* Shadow BEFORE calling through: the engine's source buffer is only
-     * guaranteed valid for the duration of this call. Whole-resource
-     * updates only (pDstBox == NULL) - a partial-box update of a constant
-     * buffer would need offset handling this mechanism has never observed
-     * and must not guess at. */
-    if (pSrcData != NULL && DstSubresource == 0 && pDstBox == NULL && g_direct_pool_count > 0) {
+     * guaranteed valid for the duration of this call. */
+    if (pSrcData != NULL && DstSubresource == 0 && g_direct_pool_count > 0) {
         int i, n = g_direct_pool_count;
         for (i = 0; i < n; i++) {
             if (g_direct_pool[i].buf == (ID3D11Buffer *)pDstResource) {
-                UINT bytes = g_direct_pool[i].byte_width;
-                if (bytes > MVP_CB_BYTES) {
-                    bytes = MVP_CB_BYTES;
+                UINT cap = g_direct_pool[i].byte_width;
+                UINT off = 0, bytes;
+
+                if (cap > MVP_CB_BYTES) {
+                    cap = MVP_CB_BYTES; /* also guaranteed unreachable by the static assert above */
                 }
-                memcpy(g_shadow[i], pSrcData, bytes);
-                InterlockedExchange(&g_shadow_valid[i], 1); /* publish AFTER the copy */
+
+                /* FIX ROUND 5, finding #6: partial-box updates are now
+                 * HANDLED rather than silently refused. For a BUFFER,
+                 * D3D11_BOX::left/right are plain byte offsets, so a
+                 * partial update is just a memcpy at an offset. Refusing
+                 * them (the round-4 behaviour) left the shadow silently
+                 * STALE with no counter and no log - the exact class of
+                 * blind spot that cost this task three rounds. */
+                if (pDstBox != NULL) {
+                    if (pDstBox->right <= pDstBox->left) {
+                        break; /* empty/degenerate box: nothing to copy */
+                    }
+                    off = pDstBox->left;
+                    bytes = pDstBox->right - pDstBox->left;
+                    if (off >= cap) {
+                        break; /* entirely outside our window */
+                    }
+                    if (bytes > cap - off) {
+                        bytes = cap - off; /* clamp to the shadow */
+                    }
+                    InterlockedIncrement(&g_diag_shadow_partial);
+                } else {
+                    bytes = cap;
+                }
+
+                mvp_shadow_note_writer(i);
+
+                /* Seqlock write side: odd while the copy is in flight.
+                 * InterlockedIncrement is a full barrier on x86/x64, so the
+                 * memcpy cannot be hoisted above it or sunk below the
+                 * closing increment. */
+                if ((InterlockedIncrement(&g_shadow_seq[i]) & 1) == 0) {
+                    /* We incremented to an EVEN value, so the counter was
+                     * already odd: another thread is inside its own copy of
+                     * this same slot right now. Genuine write/write
+                     * concurrency - a seqlock does not make this safe. */
+                    InterlockedIncrement(&g_diag_shadow_concurrent);
+                    if (InterlockedCompareExchange(&g_shadow_concurrent_warned, 1, 0) == 0) {
+                        log_msg("mvp_patch: WARNING - CONCURRENT writers on world cb0 shadow slot %d "
+                                 "(thread %lu entered while another was mid-copy). The reader-side "
+                                 "seqlock cannot make this safe: two writers can interleave into the "
+                                 "same shadow. Writer/writer exclusion (a per-slot lock) is REQUIRED "
+                                 "before this module's patched output can be trusted.",
+                                 i, (unsigned long)GetCurrentThreadId());
+                    }
+                }
+
+                memcpy(g_shadow[i] + off, pSrcData, bytes);
+
+                /* A partial update only makes the shadow valid if the whole
+                 * window has been populated at least once - otherwise the
+                 * untouched remainder is still zeros, which must not be
+                 * patched from. A whole-resource update always validates. */
+                if (pDstBox == NULL) {
+                    InterlockedExchange(&g_shadow_valid[i], 1); /* publish AFTER the copy */
+                }
+                InterlockedIncrement(&g_shadow_seq[i]); /* back to even: copy complete */
                 InterlockedIncrement(&g_shadow_writes);
                 break;
             }
@@ -1094,7 +1388,7 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
     ID3D11VertexShader *vs = NULL;
     ID3D11Buffer *buf = NULL;
     int offs[4];
-    void *cpu_ptr;
+    int shadow_slot;
     UINT byte_width;
     unsigned char local_copy[MVP_CB_BYTES];
     UINT copy_bytes;
@@ -1147,8 +1441,8 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
         return 0; /* nothing bound at slot 0 */
     }
 
-    cpu_ptr = mvp_direct_pool_find(buf, &byte_width);
-    if (cpu_ptr == NULL) {
+    shadow_slot = mvp_direct_pool_find(buf, &byte_width);
+    if (shadow_slot < 0) {
         /* Not one of the persistently-mapped world cb0 buffers (e.g. a
          * small immediate-context cb0 - this mechanism intentionally does
          * not cover those, only the deferred world draws). Fail-safe skip,
@@ -1174,10 +1468,13 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
             memset(&bd, 0, sizeof(bd));
             ID3D11Buffer_GetDesc(buf, &bd);
             log_msg("mvp_patch: DIAG first pool-miss: a KNOWN/patchable shader's bound slot0 "
-                     "buf=%p is NOT in the direct-map pool (pool currently holds %d identities). "
-                     "That buffer's real desc: ByteWidth=%u Usage=%d BindFlags=0x%X "
-                     "CPUAccessFlags=0x%X MiscFlags=0x%X - compare against the [%d,%d]-byte "
-                     "DYNAMIC/CONSTANT_BUFFER/CPU_ACCESS_WRITE filter Hook_CreateBuffer applies",
+                     "buf=%p is not (yet) in the world cb0 pool (pool currently holds %d "
+                     "identities). That buffer's real desc: ByteWidth=%u Usage=%d BindFlags=0x%X "
+                     "CPUAccessFlags=0x%X MiscFlags=0x%X - to be registered it must be "
+                     "CONSTANT_BUFFER, Usage=DEFAULT(0), CPUAccessFlags=0 and %d-%d bytes "
+                     "(checked from the draw path by mvp_try_register_bound_buffer, NOT at "
+                     "CreateBuffer time). A miss here is expected and harmless for the small "
+                     "per-shader cb0s (64/96/128/160/176/224/272B) this mechanism does not cover",
                      (void *)buf, g_direct_pool_count, bd.ByteWidth, (int)bd.Usage, bd.BindFlags,
                      bd.CPUAccessFlags, bd.MiscFlags, MVP_POOL_BUF_MIN_BYTES, MVP_POOL_BUF_MAX_BYTES);
         }
@@ -1204,15 +1501,24 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
         return 0;
     }
 
+    /* Fix round 5 (minor): copy and forward only the bound buffer's real
+     * size, not the whole MVP_CB_BYTES window. The shader cannot legally
+     * read past the bound buffer's own extent, and the bounds check above
+     * has already guaranteed every mvp row lies inside copy_bytes, so the
+     * tail was pure waste on a path that runs ~110k times/second. The tail
+     * zero-fill went with it for the same reason. */
     copy_bytes = (byte_width < MVP_CB_BYTES) ? byte_width : MVP_CB_BYTES;
-    memcpy(local_copy, cpu_ptr, copy_bytes);
-    if (copy_bytes < MVP_CB_BYTES) {
-        memset(local_copy + copy_bytes, 0, MVP_CB_BYTES - copy_bytes);
+    if (!mvp_shadow_read(shadow_slot, local_copy, copy_bytes)) {
+        /* A writer touched this shadow during our copy - the snapshot may be
+         * torn, so skip rather than apply it (fix round 5, finding #4). */
+        InterlockedIncrement(&g_diag_shadow_torn);
+        ID3D11Buffer_Release(buf);
+        return 0;
     }
 
     /* This call's VSGetConstantBuffers() reference is always redundant now
-     * - the direct pool holds its OWN separate reference, captured once at
-     * CreateBuffer time, independent of any specific draw's binding. */
+     * - the world cb0 pool holds its OWN separate reference, taken once at
+     * registration time, independent of any specific draw's binding. */
     ID3D11Buffer_Release(buf);
 
     for (row = 0; row < 4; row++) {
@@ -1274,7 +1580,7 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
         }
         return 0;
     }
-    memcpy(mapped.pData, local_copy, MVP_CB_BYTES);
+    memcpy(mapped.pData, local_copy, copy_bytes); /* see copy_bytes note above */
     ID3D11DeviceContext_Unmap(ctx, (ID3D11Resource *)g_scratch[scratch_index], 0);
 
     ID3D11DeviceContext_VSSetConstantBuffers(ctx, 0, 1, &g_scratch[scratch_index]);
@@ -1431,13 +1737,28 @@ void mvp_patch_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx) 
     ok_us = mvp_hook_update_target_locked(ctx_vtbl[VTBL_CTX_UPDATESUBRESOURCE]);
     LeaveCriticalSection(&g_latehook_cs);
 
-    if ((!ok_di && !ok_d) || !ok_cb) {
-        /* Without CreateBuffer, the direct pool can never be populated, so
-         * even a successful Draw/DrawIndexed hook would patch nothing,
-         * forever - treat this combination as a full failure, loudly,
-         * rather than silently installing a permanently-inert hook. */
-        log_msg("mvp_patch: failed to hook enough of {DrawIndexed=%d Draw=%d CreateBuffer=%d}; "
-                 "per-draw MVP override DISABLED this session", ok_di, ok_d, ok_cb);
+    /* FIX ROUND 5, finding #2: this gate's polarity used to be backwards.
+     * It required ok_cb and ignored ok_us - but after round 4b,
+     * Hook_CreateBuffer registers NOTHING (it is pure diagnostics), while
+     * UpdateSubresource is the mechanism's ACTUAL hard dependency: without
+     * it no shadow ever becomes valid, so no draw is ever patchable and the
+     * module would log "installed" and then sit silently inert forever -
+     * precisely the failure mode this gate exists to make loud.
+     *
+     * Hard requirements now: at least one draw hook (nothing to patch
+     * without one) AND UpdateSubresource (no live content without it).
+     * CreateBuffer is downgraded to a soft warning - losing it costs only
+     * the coverage diagnostics, not the mechanism. */
+    if (!ok_cb) {
+        log_msg("mvp_patch: WARNING - could not hook ID3D11Device::CreateBuffer. The per-draw MVP "
+                 "override does NOT depend on it (buffers are registered from the draw path since "
+                 "fix round 4b); only the CreateBuffer-coverage diagnostics are lost. Continuing.");
+    }
+
+    if ((!ok_di && !ok_d) || !ok_us) {
+        log_msg("mvp_patch: failed to hook enough of {DrawIndexed=%d Draw=%d UpdateSubresource=%d} "
+                 "(CreateBuffer=%d, not required); per-draw MVP override DISABLED this session",
+                 ok_di, ok_d, ok_us, ok_cb);
         TlsFree(g_tls_index);
         g_tls_index = TLS_OUT_OF_INDEXES;
         DeleteCriticalSection(&g_direct_pool_cs);
@@ -1465,14 +1786,22 @@ void mvp_patch_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx) 
     }
 
     g_installed = 1;
-    log_msg("mvp_patch: installed (DrawIndexed=%d Draw=%d CreateBuffer=%d UpdateSubresource=%d); "
-             "world cb0 buffers (%d-%d bytes, DEFAULT/no-CPU-access) are registered as CreateBuffer "
-             "creates them and shadowed on every UpdateSubresource; deferred contexts get their own "
-             "UpdateSubresource late-hooked on their first draw; scratch pool created lazily on the "
-             "first patchable draw",
-             ok_di, ok_d, ok_cb, ok_us, MVP_POOL_BUF_MIN_BYTES, MVP_POOL_BUF_MAX_BYTES);
+    log_msg("mvp_patch: installed (DrawIndexed=%d Draw=%d UpdateSubresource=%d; CreateBuffer=%d, "
+             "diagnostics only); world cb0 buffers (%d-%d bytes, DEFAULT/no-CPU-access) are "
+             "registered FROM THE DRAW PATH the first time one is seen bound at VS slot 0 for a "
+             "draw with a usable mvpmatrix, and their content is shadowed on every "
+             "UpdateSubresource; deferred contexts get their own UpdateSubresource late-hooked on "
+             "their first draw; scratch pool created lazily on the first patchable draw",
+             ok_di, ok_d, ok_us, ok_cb, MVP_POOL_BUF_MIN_BYTES, MVP_POOL_BUF_MAX_BYTES);
 }
 
+/* ORDERING REQUIREMENT (fix round 5, minor): mh_glue_shutdown() MUST have
+ * disabled this module's hooks before this runs. Nothing here is safe
+ * against a concurrently-live detour - it releases the pool's buffer
+ * references and deletes the critical sections a live Hook_UpdateSubresource
+ * or Hook_DrawIndexed would still be touching. hooks_remove() already calls
+ * mh_glue_shutdown() first, and documents why; this comment records the
+ * dependency on this side too, since it was previously implicit. */
 void mvp_patch_remove(void) {
     int i;
 
