@@ -1,5 +1,21 @@
 # The Evil Within VR — Status
 
+**2026-08-21: *** TASK 6 RESOLVED — THE PHASE 4 KEYSTONE PROOF IS PASSED ***.**
+The mod owns and can rewrite the world's per-draw camera transform on real,
+deferred-recorded, in-game geometry — the single feasibility gate the whole
+VR conversion rested on. Reached after three rounds that turned out to be
+built on a false premise (the real world buffers cannot be `Map`ped at all;
+every earlier "successful capture" was a same-size decoy pool), root-caused
+and fixed by shadowing `UpdateSubresource` writes instead. Proven with three
+captured frames (baseline / identity-control / 90°-test) and a falsifiable
+check: an unpatched lighting effect stays fixed on screen while every
+MVP-bearing object visibly moves. Full write-up, including the three false
+starts and the gaps carried forward to the stereo work:
+[notes/10-keystone-proof-task6-resolved.md](10-keystone-proof-task6-resolved.md).
+**Next: Task 7** — the double-render/stereo mechanism, which per the plan
+merges with Task 6's own patch point (per-draw substitution, twice per draw,
+once per eye) rather than re-executing command lists.
+
 **2026-08-20, offline research pass** (while the human-witnessed Task 6
 runtime proof was pending): re-mined existing captures and statically
 disassembled already-dumped shaders (no game execution) to de-risk that
