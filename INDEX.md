@@ -10,8 +10,9 @@ write-up in `topics/`. Status tags:
 
 | Date | Topic | Status | Summary |
 | --- | --- | --- | --- |
-
-*(No topics yet — this repo was seeded 2026-08-24. Run `/game-research the-evil-within-vr` to start.)*
+| 2026-08-25 | [Native D3D11 OpenVR Submit — no readback needed](topics/2026-08-25-native-d3d11-openvr-submit-no-readback.md) | 🆕 new | Being already-native D3D11 means headset submission can use `IVRCompositor::Submit` with `TextureType_DirectX` directly on the rendered eye textures — none of the CPU-readback/D3D9Ex-shared-surface complexity Far Cry 2 and XIII needed applies here. |
+| 2026-08-25 | [Submit must be called from the render thread](topics/2026-08-25-submit-must-be-called-from-render-thread.md) | 🆕 new | OpenVR requires Submit to be called from the same thread you render on — lines up naturally with this project's already-hooked Present thread, given the game's unusual 6-worker-thread command-recording architecture. A concrete design constraint for sub-project 2. |
+| 2026-08-25 | [vorpX precedent + id Tech 5 caveat](topics/2026-08-25-vorpx-precedent-and-id-tech-5-caveat.md) | 🆕 new | vorpX works well for The Evil Within specifically (strong community feedback), but Wolfenstein: The New Order (also id Tech 5, different studio's fork) can't do true 3D — a reminder not to generalize from "id Tech 5" as a category in either direction. |
 
 ## How to add a topic
 
