@@ -31,6 +31,9 @@ This table grows as `/game-research the-evil-within-vr` finds new leads.
 
 | Source / Work | Creator(s) | Link |
 |---|---|---|
+| OpenVR / openvr.h and wiki documentation | Valve | https://github.com/ValveSoftware/openvr |
+| vorpX The Evil Within compatibility reports | vorpX forum community | https://www.vorpx.com/forums/topic/i-just-need-to-say-evil-within-2-in-vorpx-is-amazing/ |
+| vorpX Wolfenstein/id Tech 5 compatibility discussion | vorpX forum community | https://www.vorpx.com/forums/topic/list-of-opengl-games-i-e-wolfenstein-new-order/ |
 
 AI development assistance: **Claude (Anthropic)** (https://www.anthropic.com).
 
