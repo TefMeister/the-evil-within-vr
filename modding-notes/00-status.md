@@ -1,0 +1,115 @@
+# Status
+
+**Last updated: 2026-08-21 — WE CAN MOVE THE CAMERA. This is the big one.**
+
+The single question the whole VR conversion hinged on — can we actually take
+control of the game's camera and prove it — is answered: yes. It took three
+wrong turns (two of them expensive) before landing on the real mechanism, and
+we proved it with a genuinely convincing test rather than just "it looked
+different." Full story in
+[10-we-can-move-the-camera.md](10-we-can-move-the-camera.md). Next: turn this
+rough proof-of-control into the real per-eye camera maths for actual stereo.
+
+**Previously (2026-08-20, session 4) — Task 6 discovery SOLVED: we found where the world's position matrix lives, and it's readable right when we need it.**
+
+The last mystery is gone. Each object's position matrix lives in a small set of
+buffers (six of them) that the game keeps permanently open and pokes new numbers
+into directly — which is why we never caught it "writing" them. By reading those
+buffers at the moment each object draws, we confirmed we can see every object's
+matrix exactly when we'd want to change it. That unblocks stereo: for each eye,
+read the matrix, nudge it by that eye's offset, hand back our copy, draw. Full
+story in [08-finding-the-worlds-matrix.md](08-finding-the-worlds-matrix.md).
+Next: build that interception and prove it by making the whole world turn on
+command. (Also this session — **Task 5 SOLVED**: the second eye comes from
+replaying the recorded command lists per eye; see
+[07-how-the-frame-is-drawn.md](07-how-the-frame-is-drawn.md).)
+
+**Earlier this session — Task 5:**
+
+We taught the proxy to log the game's draw commands in order and discovered the
+game draws each frame on **six threads at once**, recording lists of commands
+that a seventh thread plays back. To learn what those lists contain, we added a
+switch to skip playing them and flipped it on for a few seconds mid-game: **the
+world went black** — all the scenery and Sebastian's body disappeared, leaving
+only his hair and the windows and lights. So the six threads record the world;
+the main thread only draws the extras. That decides the stereo plan: to get the
+world into both eyes we **play those recorded lists back a second time, once per
+eye**, each into its own half of the screen with that eye's master matrix. Full
+story in [07-how-the-frame-is-drawn.md](07-how-the-frame-is-drawn.md). One detail
+remains for the next stage — whether a second playback picks up fresh camera
+numbers or the recorded ones — but the method is settled.
+
+The earlier win still stands (Task 4): every object is drawn with its own
+finished model-view-projection matrix (`mvpmatrix`, id Tech 5's parameter
+system), and one fixed per-eye matrix multiplied onto every object's matrix gives
+a correct eye view — no per-object understanding needed. Full story in
+[06c-reading-the-shaders.md](06c-reading-the-shaders.md).
+
+---
+
+
+The stereo 6DOF core is being built from a 10-task plan. Two tasks are done. Task
+1: a proxy `winmm.dll` that forwards all 180 winmm exports gets our code running
+inside the game ([04-proxy-loader.md](04-proxy-loader.md), including the "forward
+everything, not just the exe's imports" lesson). Task 2: a MinHook hook on
+Direct3D 11's `Present` — the end-of-frame call — obtained by borrowing the
+address from a throwaway swap-chain's vtable, now firing every frame on the
+game's render thread with the game responsive
+([05-present-hook.md](05-present-hook.md)). Next up: capturing the game's real
+device and back-buffer from inside the hook.
+
+Approach for the sub-project: inject via a proxy `winmm.dll` with MinHook (refined
+from `dxgi.dll` during planning), render the scene twice per frame with true
+geometry (not depth reprojection), and — for the first milestone — present it
+side-by-side on the flat monitor to prove stereo correctness before adding head
+tracking and OpenVR compositor submission (those are sub-project 2). The full
+design and plan live in the dev-archive repo.
+
+---
+
+**Earlier: feasibility spike complete, verdict: feasible.**
+
+We spent one session answering a single question before committing to anything:
+*can The Evil Within be brought into VR at all, and by which route?* The answer
+is yes, and the engine turned out to be friendlier than "it needs complete
+reverse engineering" first suggested.
+
+The short version:
+
+- The game renders with **Direct3D 11**, which is the best-supported target for
+  VR injection. This is the single most important finding.
+- The id Tech **developer console and cvar system are intact**, and several
+  cvars map directly onto VR needs (FOV, first-person, HUD, player shadow,
+  view-origin offsets). A lot of the "easy tier" may be console tweaks rather
+  than assembly patches.
+- The executable **does not use ASLR** — it loads at the same address every
+  time — so addresses we find stay valid. That saves a great deal of RE effort.
+- Both **XInput and DirectInput** are active, and the player is a **fully-rigged
+  model driven by Morpheme** animation middleware, which is good news for the
+  motion-control, full-body, and shadow goals.
+
+No mod code exists yet. The next step is to break the mod into stages and design
+the first one — the stereo 6DOF core, which is the foundation and the biggest
+risk.
+
+## What is confirmed vs. still aspirational
+
+**Confirmed (this session):** D3D11 renderer; intact console/cvar system; no
+ASLR; both input APIs present; fully-rigged player model; Morpheme animation
+middleware; the cvar name table located at a stable address in live memory.
+
+**Still aspirational (not yet attempted):** stereo rendering, head tracking,
+motion controllers, and every gameplay-interaction feature. These are the real
+engineering, staged for later sub-projects. Nothing here is claimed to work in
+VR yet.
+
+## Planned stages
+
+1. **Stereo 6DOF core** — D3D11 hook, dual-eye rendering, VR runtime submission,
+   head tracking. The make-or-break foundation.
+2. **First-person and view polish** — collapse the third-person camera, fix the
+   rough first-person weapon animations, HUD/shadow/FOV, 3D ammo counter.
+3. **Motion controllers** — 6DOF aiming, aim-down-sights, two-handing, holsters.
+4. **Interaction gestures** — manual reload, slide rack, pump action, motion
+   melee, physical pickup, collision door-push, physical crouch.
+5. **Body and roomscale** — full-body IK and roomscale mapping.
