@@ -1,22 +1,22 @@
-# the-evil-within-vr-external-research
+# the-evil-within-vr — `external-research/`
 
 Ongoing **public research** findings for The Evil Within VR mod — leads, prior art, and technique write-ups gathered from publicly available sources (blogs, forums, existing tools, documentation), kept **separate from hands-on modding work**.
 
 This repo exists so a dedicated research-only session can run *at the same time* as active reverse-engineering/coding work without any risk of the two colliding — research never writes to any of the other five repos, and the modding side just reads this one when it wants to check for new leads. See [INDEX.md](INDEX.md) for the running list of topics.
 
-## The six repositories for The Evil Within VR
+## The folders for The Evil Within VR
 
-Everything for this game lives in six repositories, each with one job — so you
-always know where to look. You are in **the-evil-within-vr-external-research**.
+Everything for this game lives in one repository, one folder per job — so you
+always know where to look. You are in **`external-research/`**.
 
-| Repository | What lives here |
+| Folder | What lives here |
 | --- | --- |
-| [the-evil-within-vr-mod](https://github.com/TefMeister/the-evil-within-vr-mod) | The mod itself — a `winmm.dll` proxy driving stereo via D3D11 hooks (pre-release; source). |
-| [the-evil-within-vr-dev-archive](https://github.com/TefMeister/the-evil-within-vr-dev-archive) | Full development history — snapshots, probes, dead ends, raw recon. |
-| [the-evil-within-vr-modding-notes](https://github.com/TefMeister/the-evil-within-vr-modding-notes) | Readable field notes / progress ledger. |
-| [the-evil-within-vr-staging](https://github.com/TefMeister/the-evil-within-vr-staging) 🔒 | **Private** — unverified WIP builds, cross-machine handoff. |
-| [the-evil-within-vr-engine-research](https://github.com/TefMeister/the-evil-within-vr-engine-research) | Distilled engine reference (dossier) + reusable VR RE playbook. |
-| **the-evil-within-vr-external-research** ← you are here | Ongoing public-research leads — read-only input to the other five, never the other way around. |
+| [`mod/`](../mod/) | The mod itself — a `winmm.dll` proxy driving stereo via D3D11 hooks (pre-release; source). |
+| [`dev-archive/`](../dev-archive/) | Full development history — snapshots, probes, dead ends, raw recon. |
+| [`modding-notes/`](../modding-notes/) | Readable field notes / progress ledger. |
+| [staging/the-evil-within-vr](https://github.com/TefMeister/staging/tree/main/the-evil-within-vr) 🔒 | **Private** — unverified WIP builds, cross-machine handoff. |
+| [`engine-research/`](../engine-research/) | Distilled engine reference (dossier) + reusable VR RE playbook. |
+| **`external-research/`** ← you are here | Ongoing public-research leads — read-only input to the other five, never the other way around. |
 
 ## How this repo is used
 
