@@ -1,4 +1,4 @@
-# the-evil-within-vr-modding-notes
+# the-evil-within-vr — `modding-notes/`
 
 Readable, trial-and-error field notes from an AI-assisted effort to build a
 full 6DOF VR mod for **The Evil Within** (2014), a game running on a heavily
@@ -7,27 +7,27 @@ modified id Tech 5 engine with no existing VR modding framework.
 These notes are the distilled, human-readable version of the work: what we
 tried, what we learned, and the gotchas worth remembering. For the full raw
 archive (probes, snapshots, and the messy in-progress history), see
-[the-evil-within-vr-dev-archive](https://github.com/TefMeister/the-evil-within-vr-dev-archive).
+[`dev-archive/`](../dev-archive/).
 For actual working mod releases, see
-[the-evil-within-vr-mod](https://github.com/TefMeister/the-evil-within-vr-mod).
+[`mod/`](../mod/).
 
 **No game files are included here — only material we wrote ourselves.** The
 memory addresses, cvar names, and engine details recorded in these notes are
 interoperability facts about how the game runs, not game assets.
 
-## The six repositories for The Evil Within VR
+## The folders for The Evil Within VR
 
-Everything for this game lives in six repositories, each with one job — so you
-always know where to look. You are in **the-evil-within-vr-modding-notes**.
+Everything for this game lives in one repository, one folder per job — so you
+always know where to look. You are in **`modding-notes/`**.
 
-| Repository | What lives here |
+| Folder | What lives here |
 | --- | --- |
-| [the-evil-within-vr-mod](https://github.com/TefMeister/the-evil-within-vr-mod) | The mod itself — a `winmm.dll` proxy driving stereo via D3D11 hooks (pre-release; source). |
-| [the-evil-within-vr-dev-archive](https://github.com/TefMeister/the-evil-within-vr-dev-archive) | Full development history — snapshots, probes, dead ends, raw recon. |
-| **the-evil-within-vr-modding-notes** ← you are here | Readable field notes / progress ledger. |
-| [the-evil-within-vr-staging](https://github.com/TefMeister/the-evil-within-vr-staging) 🔒 | **Private** — unverified WIP builds, cross-machine handoff. |
-| [the-evil-within-vr-engine-research](https://github.com/TefMeister/the-evil-within-vr-engine-research) | Distilled engine reference (dossier) + reusable VR RE playbook. |
-| [the-evil-within-vr-external-research](https://github.com/TefMeister/the-evil-within-vr-external-research) | Ongoing public-research leads, gathered separately from hands-on modding work. |
+| [`mod/`](../mod/) | The mod itself — a `winmm.dll` proxy driving stereo via D3D11 hooks (pre-release; source). |
+| [`dev-archive/`](../dev-archive/) | Full development history — snapshots, probes, dead ends, raw recon. |
+| **`modding-notes/`** ← you are here | Readable field notes / progress ledger. |
+| [staging/the-evil-within-vr](https://github.com/TefMeister/staging/tree/main/the-evil-within-vr) 🔒 | **Private** — unverified WIP builds, cross-machine handoff. |
+| [`engine-research/`](../engine-research/) | Distilled engine reference (dossier) + reusable VR RE playbook. |
+| [`external-research/`](../external-research/) | Ongoing public-research leads, gathered separately from hands-on modding work. |
 
 ## Contents
 
