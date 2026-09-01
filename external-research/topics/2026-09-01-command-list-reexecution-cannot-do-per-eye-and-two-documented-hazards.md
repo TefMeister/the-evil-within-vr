@@ -78,8 +78,8 @@ message. Worth doing before, not after, chasing a patching bug.
 
 ## What is NOT established
 
-- All of the above is **API semantics**, `[verified from published first-party documentation,
-  2026-09-01]` — it says what Direct3D guarantees, not what this game does. **Whether The Evil
+- All of the above is **API semantics**, `[reported]` from published first-party Direct3D
+  documentation (read 2026-09-01) — it says what Direct3D guarantees, not what this game does. **Whether The Evil
   Within uses queries at all, and whether it passes `TRUE` or `FALSE` for `RestoreContextState`, is
   unmeasured** and both are answerable statically or with one instrumented run.
 - The per-draw density figures (~1900 draws, ~6 buffer identities) are this project's own prior
