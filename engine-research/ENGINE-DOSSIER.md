@@ -293,15 +293,43 @@ through.
   unexplained `pool_miss` residual). Must be closed, or at least understood
   and bounded, before Task 7/8 — an unpatched draw in a stereo build renders
   at the wrong per-eye orientation, not just mono-incorrectly.
+  - **BOUNDED 2026-09-01 (the shader-layout half).**
+    `[measured 2026-09-01 from `dev-archive/recon/2026-09-01-shader-reflection/mvp_offsets.log`,
+    n=168 shaders, one gameplay session]` Of 168 vertex shaders: **112 (66.7%) contiguous** and
+    patched today; **22 carry no MVP at all** (the Domain-Shader/tessellated group of §8 — not a
+    gap to close here); **34 carry an MVP with scattered rows**, and those collapse into only
+    **10 distinct `(cb0, mvpx)` shapes**. One shape, **`cb0=128 mvpx=64`, is 15 of the 34 (44%)**.
+    Handling shapes in frequency order takes shader coverage 66.7% -> 75.6% (1 shape) -> 80.4%
+    (3) -> 86.9% (all 10).
+  - Two constraints on what "non-contiguous" can mean: **`mvpx` is always a whole number of
+    float4 rows** (0/64/96/144), so this is not an alignment artefact; and **`cb0 - mvpx >= 64`
+    in all 10 shapes**, so there is always room for four rows after the base — the rows are
+    **interleaved with other constants**, not truncated.
+  - **⚠️ These are SHADER counts; the 74–77% above is DRAW coverage.** The busiest shape by
+    shader count need not be the busiest by draw count. Do not restate the 44% as a draw figure.
+    Says nothing about the `pool_miss` residual, which is a buffer-identity problem, not a
+    shader-layout one.
+  - **Blocked on one launch.** The reflection table records only a base offset and a contiguity
+    flag, so rows 1-3 are not recoverable from it; that needs vertex-shader bytecode, and **none
+    was ever saved**. One launch with the shader-dump path, then
+    `proxy-winmm/tools/dxbc_disasm.c` offline, turns the table from `(base, contiguous)` into four
+    explicit row offsets — which is the change `mvp_patch` needs to handle any scattered layout.
 - **Shadow writer-concurrency risk, measured safe not structurally guaranteed.**
   The world cb0 shadow's single-writer assumption is false (writes are
   routinely cross-thread) but writes have never been observed truly
   concurrent (a seqlock would detect and fail-safe-skip if they were). This
   holds on the dev machine across every session tested; it is not proven to
-  hold on different hardware/thread-scheduling. The counter that would reveal
-  a violation currently only prints during a diagnostic window, not
-  continuously — needs a one-line visibility fix before this can be trusted
-  as "monitored" rather than "measured once."
+  hold on different hardware/thread-scheduling.
+  - **VISIBILITY FIXED 2026-09-01** (branch `stereo-6dof-core`, built clean, **not run**). The
+    problem was worse than "only prints during a diagnostic window":
+    `g_diag_shadow_concurrent` / `_torn` / `_multiwriter` were reachable **only** through
+    `mvp_diag_report_misses()`, which runs under `pool_miss > 0 && patched == 0` — i.e. **only
+    while patching is failing outright**, so in the normal working case they printed **never** and
+    a violation on other hardware would have been silent. They now print on their own whenever
+    non-zero, **cumulatively** (the question is "has this ever happened on this machine", not "how
+    often in the last window"), with an explicit warning when the precondition has actually been
+    violated. Visibility only, no behaviour change. This is now **monitored**, not "measured once"
+    — but still only *measured safe* until a session actually reports zeroes.
 - **New (2026-08-20): tessellated/Domain-Shader geometry is invisible to the
   current patch mechanism.** At least two skinned-mesh vertex shaders never
   compute `SV_Position` themselves (a Domain Shader does, downstream) — see
