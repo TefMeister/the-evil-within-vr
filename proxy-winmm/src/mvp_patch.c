@@ -542,6 +542,38 @@ static void mvp_diag_maybe_report(void) {
             mvp_diag_report_misses();
         }
     }
+
+    /* Shadow-concurrency visibility (2026-09-01).
+     *
+     * The single-writer assumption behind the cb0 shadow is FALSE - writes are
+     * routinely cross-thread - and it is only the observation that they are
+     * never truly CONCURRENT that makes the shadow safe. That observation held
+     * on the dev machine in every session tested, but it is a measurement, not
+     * a structural guarantee, and different hardware or thread scheduling
+     * could break it.
+     *
+     * The counters that would reveal a violation were reachable only through
+     * mvp_diag_report_misses() above, which runs only while
+     * `pool_miss > 0 && patched == 0` - i.e. only while patching is failing
+     * outright. So in the normal, working case the safety counters were
+     * printed exactly never, and a violation on another machine would have
+     * been silent. Reported here instead, unconditionally on non-zero and
+     * independently of whether anything else was logged, so "measured safe"
+     * can become "monitored".
+     *
+     * Cumulative, deliberately not reset: unlike the per-window skip counters
+     * above, the question these answer is "has this EVER happened on this
+     * machine", not "how often in the last window". */
+    if (g_diag_shadow_concurrent || g_diag_shadow_torn || g_diag_shadow_multiwriter) {
+        log_msg("mvp_patch: DIAG shadow concurrency (cumulative): cross-thread writes=%ld, "
+                "CONCURRENT writes=%ld, draws skipped for a torn shadow=%ld%s",
+                g_diag_shadow_multiwriter, g_diag_shadow_concurrent, g_diag_shadow_torn,
+                (g_diag_shadow_concurrent || g_diag_shadow_torn)
+                    ? "  <== the single-writer precondition has been VIOLATED on this machine; "
+                      "the shadow needs real synchronisation (per-context shadows) before this "
+                      "build can be trusted here"
+                    : "  (cross-thread only, no concurrency observed - the expected state)");
+    }
     /* Deliberately silent if EVERY counter is 0 (e.g. at the menu, before
      * any draw reaches mvp_patch_prepare() at all, or between reports with
      * genuinely zero activity) - matches this module's existing
