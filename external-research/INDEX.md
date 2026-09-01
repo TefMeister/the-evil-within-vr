@@ -1,6 +1,10 @@
 # Research index
 
-**Last `/gr` pass: 2026-09-01 — FULL.** Inbox drained — and the drop in it (a `/sr` sweep note about
+**Last `/gr` pass: 2026-09-01 (second pass, estate sweep) — CHECK-IN.** Inbox drained: `/gs`'s
+report that the command-list topic tagged its central limitation with an invented name. Fixed to
+`[reported]`, precision kept in the prose. No new research this pass.
+
+_Earlier the same day — FULL:_ inbox drained — and the drop in it (a `/sr` sweep note about
 `+com_allowconsole 1` and `noclip`) was **redundant**: §9 and §10 of our own `ENGINE-DOSSIER.md` have
 documented that console, its unlock, its command set and a deterministic launch recipe using it since
 2026-08-20/21, in more detail than the drop carried. Recorded rather than quietly binned, because the
