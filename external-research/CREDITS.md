@@ -34,6 +34,10 @@ This table grows as `/game-research the-evil-within-vr` finds new leads.
 | OpenVR / openvr.h and wiki documentation | Valve | https://github.com/ValveSoftware/openvr |
 | vorpX The Evil Within compatibility reports | vorpX forum community | https://www.vorpx.com/forums/topic/i-just-need-to-say-evil-within-2-in-vorpx-is-amazing/ |
 | vorpX Wolfenstein/id Tech 5 compatibility discussion | vorpX forum community | https://www.vorpx.com/forums/topic/list-of-opengl-games-i-e-wolfenstein-new-order/ |
+| US Patent 10068366B2, "Stereo multi-projection implemented using a graphics processing pipeline" | NVIDIA Corp | https://patents.google.com/patent/US10068366B2/en |
+| "Direct3D 11 Advanced Stages: Hull Shader Design" | Microsoft | https://github.com/MicrosoftDocs/win32/blob/docs/desktop-src/direct3d11/direct3d-11-advanced-stages-hull-shader-design.md |
+| "id Tech 5 Challenges: From Texture Virtualization to Massive Parallelization" (SIGGRAPH) | J.M.P. van Waveren / id Software | https://mrl.cs.vsb.cz/people/gaura/agu/05-JP_id_Tech_5_Challenges.pdf |
+| "Rage: The Tech Behind id Tech 5" | HotHardware | https://hothardware.com/reviews/rage-the-tech-behind-id-tech-5 |
 
 AI development assistance: **Claude (Anthropic)** (https://www.anthropic.com).
 
