@@ -1,8 +1,7 @@
 # Research index
 
-**Last `/gr` pass: 2026-09-01 (second pass, estate sweep) — CHECK-IN.** Inbox drained: `/gs`'s
-report that the command-list topic tagged its central limitation with an invented name. Fixed to
-`[reported]`, precision kept in the prose. No new research this pass.
+**Last `/gr` pass: 2026-09-02 (estate sweep) — CHECK-IN** (board OPEN block + INDEX; no dossier or topic re-read)**.** Inbox empty. **Nothing new.** The open rows are a branch-merge decision, a witnessed runtime proof and a bytecode-saving launch — none of them a public-research question. Not searched.
+_Previous: Last `/gr` pass: 2026-09-01 (second pass, estate sweep) — CHECK-IN. Inbox drained: `/gs`'s report that the command-list topic tagged its central limitation with an invented name. Fixed to `[reported]`, precision kept…_
 
 _Earlier the same day — FULL:_ inbox drained — and the drop in it (a `/sr` sweep note about
 `+com_allowconsole 1` and `noclip`) was **redundant**: §9 and §10 of our own `ENGINE-DOSSIER.md` have
