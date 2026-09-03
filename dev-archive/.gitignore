@@ -24,3 +24,10 @@
 # Local scratch
 /tmp/
 *.log
+
+# ...but recon evidence tables are DERIVED DATA, not run logs. `*.log` above silently
+# blocked `recon/2026-09-01-shader-reflection/mvp_offsets.log` for two days: a session
+# copied it in believing it was rescued, git never took it, and it stayed a single-disk
+# file. Negate the rule for recon/ so evidence cannot be lost that way again.
+!dev-archive/recon/**/*.log
+!recon/**/*.log
