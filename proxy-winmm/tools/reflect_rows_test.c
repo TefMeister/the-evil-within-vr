@@ -16,7 +16,7 @@
  *
  * Usage: reflect_rows_test <shaders.bin> <expected.txt>
  *
- * Builds and runs nothing from the game. See test/README.md.
+ * Builds and runs nothing from the game. See README-reflect-rows-test.md.
  */
 #include <stdio.h>
 #include <stdlib.h>
