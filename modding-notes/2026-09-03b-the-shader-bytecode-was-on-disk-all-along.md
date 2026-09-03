@@ -29,9 +29,18 @@ The missing piece was the **offset table**, and it was found by asking a questio
 answer: if a table of data offsets exists, the first entry's offset is a value we already know, so
 search the file for `0x1902F0` as a 32-bit big-endian integer. Exactly one hit, at `0x2F77AB8`.
 
-What makes it a parse rather than a guess: **every record's `offset + csize` equals the next
-record's `offset`, with no gaps, across all 9,001 entries.** 47,203,026 compressed bytes expand to
-133,454,381.
+What makes it a parse rather than a guess is **not** the chained
+`offset + csize == next offset`, tempting though that is to quote: the walker stops the moment that
+chain breaks, so it can only ever hold for the records the walker chose to accept. Two checks
+independent of the walk do the work instead. The first record's offset is exactly `TOC_END + 8`. And
+the **count 9001 is stored as a big-endian `u32` at `0x2E945C2`, precisely the byte where the last
+record says the data ends** — inside a small metadata block that also records the size of the other
+trailing table. 47,203,026 compressed bytes expand to 133,454,381.
+
+**Not decoded:** the `id` field was never mapped to a TOC name. Entries were identified by *content*
+(a DXBC signature) and later by *hash* — never by filename — so which entry is which `.shaderbin2`
+remains unknown, and the 76 `.shaderbin2` names and the 2,785 DXBC-bearing entries have not been
+reconciled. Nothing in this note depends on that mapping, but it is a real hole.
 
 **Unclosed residual:** 249 of 9,001 entries (2.8%) fail to inflate. No shader was lost to this — the
 hash match below accounts for all but one of the 168 — but the failures are real and unexplained,

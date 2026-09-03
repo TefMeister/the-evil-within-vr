@@ -53,13 +53,19 @@ and the assumption throughout was that a runtime dump is the only source.
   0x1902F0  data: entries back-to-back, each a HEADERLESS RAW DEFLATE stream
   0x2F77AB8 offset table: 9001 x { u32 BE file offset, u32 BE csize, u32 BE usize, u32 BE id }
   ```
-  The offset table is what makes entries addressable. Every record's
-  `offset + csize` equals the next record's `offset`, with no gaps, across all 9001 entries — which
-  is what says the layout is right rather than plausible. 47,203,026 compressed bytes expand to
-  133,454,381. **249 of 9001 entries (2.8%) fail to inflate** and are unexplained; they are not
+  The offset table is what makes entries addressable. **Why the walk is believed rather than assumed:**
+  a chain of `offset + csize == next offset` proves nothing on its own, because the walker stops when
+  that breaks. The independent checks are that the first record's offset is exactly `TOC_END + 8`, and
+  that the **count 9001 is written as a `u32` BE at `0x2E945C2` — precisely the byte where the last
+  record says the data ends**, in a small metadata block that also records the size of the other
+  trailing table. 47,203,026 compressed bytes expand to 133,454,381. **249 of 9001 entries (2.8%) fail to inflate** and are unexplained; they are not
   shaders (no shader was lost — see the hash match below), but the residual is real and unclosed.
   Entries carry no per-entry header: an entry that holds a shader begins
   `u32 hash, u32 BE size, DXBC…`.
+  ⚠️ **The `id` field was NOT decoded to a TOC name.** Entries were identified by *content* (a DXBC
+  signature) and by *hash*, never by filename, so which entry is which `.shaderbin2` is unknown — and
+  the 76 `.shaderbin2` TOC names and the 2,785 DXBC-bearing entries have not been reconciled. Nothing
+  below depends on that mapping, but do not assume it exists.
 - **The shaders are DXBC, with reflection intact.** `[verified-numerically 2026-09-03]`
   2,785 entries in `common.tangoresource` contain DXBC; extracted, they are **2,785 DXBC containers
   with RDEF reflection**, 603 distinct constant-buffer layouts. `constantBufferV` — this dossier's own
