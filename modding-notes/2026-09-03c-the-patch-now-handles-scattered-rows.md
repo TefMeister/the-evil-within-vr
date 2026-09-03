@@ -71,7 +71,8 @@ patchable under the OLD contiguous-only rule : 997
 patchable under the NEW rule                 : 1192  (+195)
 ```
 
-`[verified-numerically 2026-09-03, n=2785]` · builds clean at `-Wall -Wextra`
+`[verified-numerically 2026-09-03, n=2785]` · the three changed files compile clean at
+`-Wall -Wextra`, and the full DLL builds through `build.ps1` with no errors
 `[compile-verified 2026-09-03]`
 
 Against the 168 shaders a real gameplay session produced, this takes patchable shader coverage from
@@ -127,8 +128,8 @@ already exist on both sides**, or the merge stops being free.
 
 ## Files
 
-- Branch `stereo-6dof-core`, commits `03c48ce` (the change) and the follow-up that moved the
-  harness — `mvptable.{c,h}`, `mvp_patch.c`, `tools/reflect_rows_test.c`,
+- Branch `stereo-6dof-core`, tip `219d024` — `03c48ce` is the change itself, followed by the
+  harness move and a log-wording fix — `mvptable.{c,h}`, `mvp_patch.c`, `tools/reflect_rows_test.c`,
   `tools/README-reflect-rows-test.md`.
   ⚠️ Still not merged into `main`; that remains a `[USER]` decision.
 - `dev-archive/recon/2026-09-03-tangoresource-and-branch-merge/2026-09-03-reflect-rows-test-run.txt`
