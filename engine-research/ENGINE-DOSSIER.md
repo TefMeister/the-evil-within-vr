@@ -394,6 +394,27 @@ through.
     - **Still NOT established:** that writing the four rows at these offsets renders correctly.
       Reflection gives the layout; only a run shows the patch behaves. That is the existing
       keystone/runtime row, not a new blocker.
+  - **✅ AND THE PATCH NOW USES THEM (2026-09-03, `/pd`, static, branch `stereo-6dof-core` `03c48ce`).**
+    The offsets were never missing from the runtime either: `mvptable_on_shader_created()` already
+    read `mvpmatrixy/z/w`'s `StartOffset`, compared them to `x+16/+32/+48`, kept the boolean and
+    discarded the offsets — which is why `mvp_row_offsets_for_shader()` had to refuse anything
+    non-contiguous. It now keeps all four and hands them out; contiguity is diagnostic only, and
+    `mvp_offsets.log` lines gain a `rows=x,y,z,w` field (appended, so old parsers still work).
+    - **⚠️ That change exposed a latent out-of-bounds write in `mvp_patch.c`.** Its bounds check
+      tested only `offs[3] + 16` against the bound buffer's size — valid only while offsets ascend.
+      The dominant layout here is z/w transposed, `{b, b+16, b+48, b+32}`, where `offs[2]` is the
+      highest, so a row could have been written past the end of the buffer **while the check
+      reported success**. It now tests every row. Found by checking the interaction, not by testing.
+    - **Verified offline against the game's own shaders** by a harness that links the shipped
+      `mvptable.c` and runs `mvptable_reflect_rows()` over all 2,785 archive shaders, compared
+      against an independent from-scratch RDEF parser: **0 disagreements**, 1,192 shaders with a
+      complete row set (997 contiguous, **195 scattered that were previously skipped**).
+      `[verified-numerically 2026-09-03, n=2785]` `[compile-verified 2026-09-03]` Against the 168
+      shaders one real session produced this is **112 → 146 of 168, i.e. 66.7% → 86.9%** — ⚠️ a
+      SHADER count, not a draw count, and it does nothing for the `pool_miss` residual.
+    - Deployed to `TheEvilWithin\winmm.dll`; previous build kept as
+      `winmm.dll.bak-2026-09-03-pre-scattered-rows`. ⚠️ The commit is on the branch, which is still
+      unmerged. Write-up: `modding-notes/2026-09-03c-the-patch-now-handles-scattered-rows.md`.
 - **Shadow writer-concurrency risk, measured safe not structurally guaranteed.**
   The world cb0 shadow's single-writer assumption is false (writes are
   routinely cross-thread) but writes have never been observed truly

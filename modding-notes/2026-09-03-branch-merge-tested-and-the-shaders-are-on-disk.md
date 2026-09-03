@@ -34,6 +34,14 @@ produces, against pre-merge `main` (`f342896`, 90 commits; the branch `0c43e34` 
 | files left at the old `proxy-winmm/` path | **0** |
 | conflicts | **1** — `README.md` |
 
+> **Re-measured 2026-09-03, later the same day:** the branch has since gained two commits (the
+> scattered-row change and its test harness), so the figures are now **15 added, 5 modified, 0
+> deleted**, still one `README.md` conflict and still nothing left at the old path. The shape of the
+> result is unchanged; only the counts moved. A first attempt at adding the harness put it in a new
+> `proxy-winmm/test/` directory, which git could NOT rename-map (a new directory has no counterpart
+> on `main`), leaving 2 files at the old path — caught by re-running this same measurement, and fixed
+> by moving them under the already-mapped `tools/`.
+
 Git's `ort` strategy detects the `proxy-winmm/ → mod/proxy-winmm/` directory rename by itself and
 routes the branch's edits to the new paths. The 13 files the branch *adds* are the only ones needing
 help: without the flag git raises them as "file location" conflicts and *tells you the right
