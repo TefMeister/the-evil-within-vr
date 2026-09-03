@@ -38,6 +38,8 @@ This table grows as `/game-research the-evil-within-vr` finds new leads.
 | "Direct3D 11 Advanced Stages: Hull Shader Design" | Microsoft | https://github.com/MicrosoftDocs/win32/blob/docs/desktop-src/direct3d11/direct3d-11-advanced-stages-hull-shader-design.md |
 | "id Tech 5 Challenges: From Texture Virtualization to Massive Parallelization" (SIGGRAPH) | J.M.P. van Waveren / id Software | https://mrl.cs.vsb.cz/people/gaura/agu/05-JP_id_Tech_5_Challenges.pdf |
 | "Rage: The Tech Behind id Tech 5" | HotHardware | https://hothardware.com/reviews/rage-the-tech-behind-id-tech-5 |
+| `the_evil_within.bms` QuickBMS script and the ZenHAX `.tangoresource` thread (container compression history) | aluigi and the ZenHAX community | https://www.zenhax.com/viewtopic.php@t=248.html |
+| Laura — The Evil Within asset extractor | DTZxPorter and id-daemon | https://dtzxporter.com/tools/laura |
 
 AI development assistance: **Claude (Anthropic)** (https://www.anthropic.com).
 

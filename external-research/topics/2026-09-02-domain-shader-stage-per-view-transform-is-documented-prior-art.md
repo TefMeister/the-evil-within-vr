@@ -88,3 +88,23 @@ safe on this machine, not structurally proven, and not further resolvable from p
   extractable detail: https://mrl.cs.vsb.cz/people/gaura/agu/05-JP_id_Tech_5_Challenges.pdf
 - HotHardware, "Rage: The Tech Behind id Tech 5" — checked, no relevant detail beyond
   "jobs assigned to SPEs": https://hothardware.com/reviews/rage-the-tech-behind-id-tech-5
+
+## ✅ Outcome 2026-09-03 — folded into dossier §12 verbatim (from `inbox/`)
+
+The Domain-Shader bullet in §12 now records that picking that gap up is **not a cold start**: reflect
+the DS's own constant buffer(s) for a per-view/projection row — the same discipline as the VS
+`constantBufferV` search — then apply the per-eye write at the DS stage, with the patent cited as a
+documented template and tagged `[reported]` (prior art, not something this project has tried). The
+second half — nothing public on whether id Tech 5's job system structurally guarantees non-concurrent
+cross-thread constant-buffer writes — was correct to suggest no dossier change; that risk stays worded
+"measured safe, not structurally proven".
+
+A side effect of that same session, recorded here because it changes what is worth researching: **the
+game ships its shader bytecode on disk** — `base/common.tangoresource` holds 76
+`generated/renderprogs/shader_retail/pc/*.shaderbin2` entries, and by the end of the day the container
+was fully parsed and **2,785 DXBC shaders with RDEF intact** were extracted, `constantBufferV` named
+with `mvpmatrixx/y/z/w` at explicit offsets in 1,208 of them, matching the runtime table 167/168 by
+hash with zero disagreements `[verified-numerically 2026-09-03]`. The two research targets the
+morning drop opened (container layout; what `.shaderbin2` wraps) were **withdrawn the same day as
+solved in-house** — do not spend a sweep on them. What remains is small: see the 2026-09-03 topic on
+the 249 entries that will not inflate.
