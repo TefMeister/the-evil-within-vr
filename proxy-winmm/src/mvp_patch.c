@@ -323,7 +323,7 @@ static volatile LONG g_diag_not_installed = 0;      /* exit: !g_installed (shoul
 static volatile LONG g_diag_no_vs = 0;               /* exit: VSGetShader returned NULL */
 static volatile LONG g_diag_shader_unknown = 0;      /* exit: shader untracked by mvptable at all */
 static volatile LONG g_diag_shader_no_mvp = 0;       /* exit: shader known, has no mvpmatrix at all (expected for post/depth-only shaders) */
-static volatile LONG g_diag_shader_noncontig = 0;    /* exit: shader known, has mvpx, but rows not confirmed contiguous */
+static volatile LONG g_diag_shader_rows_incomplete = 0; /* exit: shader known, has mvpx, but not all four mvpmatrix rows were found */
 static volatile LONG g_diag_no_slot0_buf = 0;        /* exit: nothing bound at VS slot 0 */
 static volatile LONG g_diag_pool_miss = 0;           /* exit: bound slot0 buffer is not in the direct-map pool - THE key counter for this round's mystery */
 static volatile LONG g_diag_bounds_fail = 0;         /* exit: Important #4's bounds check failed (also has its own immediate rate-limited log) */
@@ -496,7 +496,7 @@ static void mvp_diag_report_misses(void) {
  * approximate, which is immaterial for a periodic diagnostic summary. */
 static void mvp_diag_maybe_report(void) {
     ULONGLONG now;
-    LONG not_installed, no_vs, shader_unknown, shader_no_mvp, shader_noncontig,
+    LONG not_installed, no_vs, shader_unknown, shader_no_mvp, shader_rows_incomplete,
         no_slot0_buf, pool_miss, bounds_fail, scratch_not_ready, scratch_alloc_fail,
         scratch_map_fail, patched;
 
@@ -515,7 +515,7 @@ static void mvp_diag_maybe_report(void) {
     no_vs = InterlockedExchange(&g_diag_no_vs, 0);
     shader_unknown = InterlockedExchange(&g_diag_shader_unknown, 0);
     shader_no_mvp = InterlockedExchange(&g_diag_shader_no_mvp, 0);
-    shader_noncontig = InterlockedExchange(&g_diag_shader_noncontig, 0);
+    shader_rows_incomplete = InterlockedExchange(&g_diag_shader_rows_incomplete, 0);
     no_slot0_buf = InterlockedExchange(&g_diag_no_slot0_buf, 0);
     pool_miss = InterlockedExchange(&g_diag_pool_miss, 0);
     bounds_fail = InterlockedExchange(&g_diag_bounds_fail, 0);
@@ -526,15 +526,15 @@ static void mvp_diag_maybe_report(void) {
 
     InterlockedExchange(&g_diag_report_gate, 0);
 
-    if (not_installed || no_vs || shader_unknown || shader_no_mvp || shader_noncontig ||
+    if (not_installed || no_vs || shader_unknown || shader_no_mvp || shader_rows_incomplete ||
         no_slot0_buf || pool_miss || bounds_fail || scratch_not_ready || scratch_alloc_fail ||
         scratch_map_fail || patched) {
         log_msg("mvp_patch: DIAG last ~%dms: patched=%ld | skipped: not_installed=%ld no_vs=%ld "
-                 "shader_unknown=%ld shader_no_mvp=%ld shader_noncontig=%ld no_slot0_buf=%ld "
+                 "shader_unknown=%ld shader_no_mvp=%ld shader_rows_incomplete=%ld no_slot0_buf=%ld "
                  "pool_miss=%ld bounds_fail=%ld scratch_not_ready=%ld scratch_alloc_fail=%ld "
                  "scratch_map_fail=%ld",
                  MVP_DIAG_REPORT_INTERVAL_MS, patched, not_installed, no_vs, shader_unknown,
-                 shader_no_mvp, shader_noncontig, no_slot0_buf, pool_miss, bounds_fail,
+                 shader_no_mvp, shader_rows_incomplete, no_slot0_buf, pool_miss, bounds_fail,
                  scratch_not_ready, scratch_alloc_fail, scratch_map_fail);
         if (pool_miss > 0 && patched == 0) {
             /* Only while the round-4 mystery is actually happening (misses
@@ -1451,8 +1451,8 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
             case MVP_SHADER_NO_MVP:
                 InterlockedIncrement(&g_diag_shader_no_mvp);
                 break;
-            case MVP_SHADER_NONCONTIGUOUS:
-                InterlockedIncrement(&g_diag_shader_noncontig);
+            case MVP_SHADER_ROWS_INCOMPLETE:
+                InterlockedIncrement(&g_diag_shader_rows_incomplete);
                 break;
             case MVP_SHADER_UNKNOWN:
             case MVP_SHADER_OK: /* shouldn't happen here (mvp_row_offsets_for_shader
@@ -1463,7 +1463,7 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
                 break;
         }
         ID3D11VertexShader_Release(vs);
-        return 0; /* unknown shader, or non-contiguous rows we refuse to guess at */
+        return 0; /* unknown shader, or an incomplete set of rows we refuse to guess at */
     }
     ID3D11VertexShader_Release(vs);
 
@@ -1521,16 +1521,41 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
      * silently read/write past the real buffer (which would previously
      * have applied a confidently-wrong, zero-filled "patch" instead of
      * skipping - the one path that violated the fail-safe requirement). */
-    if (offs[0] < 0 || (UINT)(offs[3] + 16) > byte_width || (UINT)(offs[3] + 16) > MVP_CB_BYTES) {
-        InterlockedIncrement(&g_diag_bounds_fail);
-        ID3D11Buffer_Release(buf);
-        if (mvp_rate_limit_should_fire(&g_offset_oob_log_count)) {
-            log_msg("mvp_patch: shader's reflected mvp row offsets (last row ends at byte %d) exceed "
-                     "the bound buffer's real size (%u bytes) or our %d-byte window; draw falls "
-                     "through unpatched (fail-safe)",
-                     offs[3] + 16, byte_width, MVP_CB_BYTES);
+    {
+        /* 2026-09-03: check EVERY row, not just offs[3].
+         *
+         * This used to test `offs[0] < 0 || offs[3] + 16 > limit`, which was
+         * correct only while row offsets were guaranteed contiguous and
+         * ascending, so that offs[3] was necessarily the highest. Now that
+         * mvp_row_offsets_for_shader() hands out the offsets reflection
+         * actually reported, that no longer holds - the dominant
+         * non-contiguous layout in this game is mvpmatrixz and mvpmatrixw
+         * TRANSPOSED, i.e. {b, b+16, b+48, b+32}, where offs[2] is the highest
+         * and offs[3] is not. Testing only offs[3] would have let a row run
+         * past the end of the bound buffer while the check reported success -
+         * exactly the silent out-of-bounds write the original check existed to
+         * prevent. */
+        int r, worst_end = 0, bad = 0;
+        for (r = 0; r < 4; r++) {
+            int end = offs[r] + 16;
+            if (offs[r] < 0 || (UINT)end > byte_width || (UINT)end > MVP_CB_BYTES) {
+                bad = 1;
+            }
+            if (end > worst_end) {
+                worst_end = end;
+            }
         }
-        return 0;
+        if (bad) {
+            InterlockedIncrement(&g_diag_bounds_fail);
+            ID3D11Buffer_Release(buf);
+            if (mvp_rate_limit_should_fire(&g_offset_oob_log_count)) {
+                log_msg("mvp_patch: shader's reflected mvp row offsets (%d,%d,%d,%d; furthest row "
+                         "ends at byte %d) exceed the bound buffer's real size (%u bytes) or our "
+                         "%d-byte window; draw falls through unpatched (fail-safe)",
+                         offs[0], offs[1], offs[2], offs[3], worst_end, byte_width, MVP_CB_BYTES);
+            }
+            return 0;
+        }
     }
 
     /* Fix round 5 (minor): copy and forward only the bound buffer's real
