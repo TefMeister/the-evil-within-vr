@@ -35,6 +35,45 @@ carry forward — see §12.
 - Console/cvars intact: launch with `+com_allowconsole 1`, open with **Insert**.
   `listcmds *` / `listcmds safe`; `idStudio` dev mode; `devmapjump <stage>`.
 
+## 3a. On-disk shader archive (NEW 2026-09-03, `/pd`, static — partially reversed)
+
+The game **does** ship its shaders on disk, which nothing in this dossier had previously recorded.
+This matters because §12's coverage-gap work is blocked only on obtaining vertex-shader bytecode,
+and the assumption throughout was that a runtime dump is the only source.
+
+- **Where.** `base/common.tangoresource` (50,008,892 bytes) contains **76 entries** named
+  `generated/renderprogs/shader_retail/pc/<name>.shaderbin2`, each paired with a `_ws` variant.
+  `[verified-numerically 2026-09-03]` The exe corroborates the vocabulary: it contains the literals
+  `renderprogs` (×13), `shaderbin` (×2) and `tangoresource` (×1).
+- **Container format, as far as it is reversed.** `[verified-numerically 2026-09-03]`
+  ```
+  +0   u32   magic 0x2394ABCD
+  +4   u32   BE entry count (0x00002D2D = 11565 for common.tangoresource)
+  +8   TOC:  count x { u32 LE len, name, u32 LE len, name, u32 hash }
+              -> ends at 0x1902E8; the walk consumed exactly 11565 records,
+                 matching the header count, which is what says the layout is right
+  ...   data region, 48,369,748 bytes, entropy 7.99 bits/byte
+  end   a regular 10-byte-record trailing index (fields increment monotonically)
+  ```
+- **The payload is raw DEFLATE (headerless).** Decompressing at 0x1902F0 with a raw inflate
+  (`wbits=-15`) yields **916,986 bytes of coherent game data** — `release.cfg` text, then material
+  declarations (`materialid`, `physicalvmtrpagesmap2`) — before desynchronising.
+  `[verified-numerically 2026-09-03]`
+- **⚠️ What is NOT established, and the honest state of the lead.** Entry offsets are **not** in the
+  TOC, so individual entries cannot yet be addressed; the decode above is one continuous run that
+  eventually loses sync, not a per-entry extraction. **Whether a `.shaderbin2` payload contains DXBC
+  at all is unknown** — it may equally be id Tech 5's own IR, in which case this route dies. The
+  archive holds **zero** literal `DXBC` bytes uncompressed, and so does the exe, so if it is there it
+  is behind the compression.
+- **The next step is narrow and decisive:** parse the 10-byte trailing index, extract one
+  `.shaderbin2`, and look at its first four bytes. That is a `[PD]` task; its outcome decides whether
+  §12's "one launch to save shader bytecode" row can be retired without a launch.
+- **⚠️ A methodology note worth more than the finding.** The first scan looked for zlib-framed
+  streams (`0x78 0x9C` etc.), found 3,489 candidate positions, decompressed exactly one, and would
+  have been written up as "the archive is not zlib". That test **could not have produced a positive
+  result**, because the data is headerless raw deflate. The retry with `wbits=-15` found it
+  immediately. A negative result is only evidence if the test could have found the thing.
+
 ## 4. DRM / anti-debug & injection foothold
 - **Steam CEG-wrapped.** Launching the raw exe *under a launch-time debugger*
   triggers a "Steam Error" — DRM refuses to unwrap. **Workaround:** launch via
@@ -314,6 +353,16 @@ through.
     was ever saved**. One launch with the shader-dump path, then
     `proxy-winmm/tools/dxbc_disasm.c` offline, turns the table from `(base, contiguous)` into four
     explicit row offsets — which is the change `mvp_patch` needs to handle any scattered layout.
+    - **✅ The offline half is now proven, 2026-09-03 (`/pd`, static).** `dxbc_disasm.c` had never
+      been built and is referenced by no build script; it now **builds clean, zero warnings**
+      `[compile-verified 2026-09-03]` and was run end-to-end against a real SM5 DXBC vertex shader,
+      printing the input/output signatures and the instruction stream, including the literal
+      `cb0[N]` row indices this work needs `[verified-numerically 2026-09-03, n=1]`. So the launch
+      is the *only* missing input, not the launch plus an unproven tool.
+      ⚠️ It lives **only on branch `stereo-6dof-core`** — it is not on `main`, along with 12 other
+      source files. See the branch-merge finding in `modding-notes/2026-09-03-...`.
+    - **A second, launch-free route to the same bytecode is now open but unfinished
+      (2026-09-03).** The game ships its shaders on disk after all — see §3a below.
 - **Shadow writer-concurrency risk, measured safe not structurally guaranteed.**
   The world cb0 shadow's single-writer assumption is false (writes are
   routinely cross-thread) but writes have never been observed truly
@@ -335,6 +384,14 @@ through.
   compute `SV_Position` themselves (a Domain Shader does, downstream) — see
   §8. Confirmed as an understood gap, not a regression — this geometry
   renders unpatched, consistent with the coverage gap above.
+  - **Not a cold start when it is picked up (external-research, 2026-09-02).** NVIDIA's own
+    patent US10068366B2 documents a domain shader reading **per-view constants** to turn
+    barycentric-interpolated tessellator output into per-eye clip-space positions — structurally
+    the same shape as §6's VS-stage `K_eye` left-multiply, one stage later. So the recipe is
+    "reflect the DS's own constant buffer(s) for a per-view/projection row, the same discipline as
+    the VS `constantBufferV` search, then apply the per-eye write at the DS stage". `[reported]` —
+    a documented template, not something this project has tried.
+    Topic: `external-research/topics/2026-09-02-domain-shader-stage-per-view-transform-is-documented-prior-art.md`.
 - Post/AA (SMAA, motion vectors) per-eye consistency deferred — now fully
   characterised with exact shader offsets (§8), ready to implement whenever
   this is picked up.

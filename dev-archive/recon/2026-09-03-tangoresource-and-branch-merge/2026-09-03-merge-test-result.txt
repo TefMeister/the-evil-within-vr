@@ -1,0 +1,40 @@
+# Merge test: stereo-6dof-core -> main, in a throwaway clone (2026-09-03)
+# git 2.55.0.windows.3, merge strategy: ort (default)
+# pre-merge main f342896 (90 commits); branch 0c43e34 adds 17; merge base d7c2182
+
+## Command
+git -c merge.directoryRenames=true merge --no-ff stereo-6dof-core
+
+## Result: name-status of f342896..merge
+A	mod/proxy-winmm/src/camera.c
+A	mod/proxy-winmm/src/camera.h
+M	mod/proxy-winmm/src/cbdump.c
+M	mod/proxy-winmm/src/dllmain.c
+A	mod/proxy-winmm/src/framecapture.c
+A	mod/proxy-winmm/src/framecapture.h
+M	mod/proxy-winmm/src/hooks.c
+M	mod/proxy-winmm/src/minhook_glue.c
+M	mod/proxy-winmm/src/minhook_glue.h
+A	mod/proxy-winmm/src/mvp_patch.c
+A	mod/proxy-winmm/src/mvp_patch.h
+A	mod/proxy-winmm/src/mvptable.c
+A	mod/proxy-winmm/src/mvptable.h
+A	mod/proxy-winmm/src/seqdump.c
+A	mod/proxy-winmm/src/seqdump.h
+A	mod/proxy-winmm/src/shaderdump.c
+A	mod/proxy-winmm/src/shaderdump.h
+A	mod/proxy-winmm/tools/dxbc_disasm.c
+
+## Deletions in that range
+0
+
+## Conflicts
+README.md only (branch side is the obsolete pre-consolidation six-repo README)
+
+## git log --follow depth for mod/proxy-winmm/src/hooks.c
+pre-merge main: 4
+after merge   : 9
+
+## Reproducibility (two independent runs)
+run1 tree 594df7740fe6bd81226386754901f377f28c7833
+run2 tree 594df7740fe6bd81226386754901f377f28c7833
