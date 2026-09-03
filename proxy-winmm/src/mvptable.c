@@ -320,7 +320,12 @@ void mvptable_on_shader_created(uint64_t hash, const void *bytecode, SIZE_T leng
     }
 
     if (!mvptable_reflect_rows(bytecode, length, &cb0_size, rows)) {
-        log_msg("mvptable: reflection found no cb0 for hash=%016llX", (unsigned long long)hash);
+        /* Deliberately vague, because these two really are indistinguishable
+         * here: D3DReflect itself can fail, or it can succeed on a shader that
+         * simply has no cb0. The pre-2026-09-03 code logged the first case
+         * only, which read as a stronger claim than it was. */
+        log_msg("mvptable: no cb0 for hash=%016llX (D3DReflect failed, or this shader has none)",
+                 (unsigned long long)hash);
         /* Still recorded below, with every row -1, so this hash is not
          * re-reflected on every subsequent CreateVertexShader for it. */
     }
