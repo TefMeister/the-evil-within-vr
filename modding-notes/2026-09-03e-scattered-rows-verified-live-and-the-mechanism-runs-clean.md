@@ -55,10 +55,14 @@ mismatch. **The offline harness's `agree=167 disagree=0` now has a live counterp
 excluding the no-MVP group** (those have no matrix to patch, so they are not a miss)
 `[measured 2026-09-03, one scene]`.
 
-⚠️ **`pool_miss` is now the whole story.** It is 24,574 against 88,421 patched — far larger than
-anything the row work addressed. It is a **buffer-identity** problem (a known/patchable shader's
-bound slot-0 buffer is not in the direct-map pool), entirely separate from row layout, and the
-scattered-row fix was never going to touch it. **That, not shader coverage, is the next ceiling.**
+⚠️ **CORRECTED 2026-09-03f — the paragraph that stood here called `pool_miss` "the next ceiling".
+That was wrong.** It is 24,574 against 88,421 patched, but the proxy's own diagnostic (present in
+this same log, and not read closely enough at the time) says a miss on the **small per-shader
+dynamic cb0s** is *expected and harmless* — the pool registers only the large shared `DEFAULT` world
+buffer, and a `USAGE_DYNAMIC` per-object buffer cannot be shadowed by that mechanism at all. These
+are **two different render paths**, not one path failing 19% of the time.
+**Whether the missed draws carry world geometry is genuinely open and unmeasured** — see
+`2026-09-03f` for the structural evidence and the bucketing work that would settle it.
 
 ⚠️ Also: 69.7 % is a **draw** figure from one scene and is not comparable to the 86.9 % **shader**
 figure from the static census. Different denominators; do not put them in the same sentence.
