@@ -1,0 +1,10 @@
+
+shaders reflected      : 2785
+  no cb0 found         : 386
+  all four rows found  : 1192  (contiguous 997, scattered 195)
+  disagreements with the independent RDEF parser: 0
+
+patchable under the OLD contiguous-only rule : 997
+patchable under the NEW rule                 : 1192  (+195)
+
+PASSED: the shipped reflection agrees with the independent parser on all 2785
