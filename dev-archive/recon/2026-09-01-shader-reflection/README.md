@@ -1,4 +1,4 @@
-# Vertex-shader MVP reflection table (rescued into git 2026-09-01)
+# Vertex-shader MVP reflection table (copied here 2026-09-01, **actually committed 2026-09-03**)
 
 `mvp_offsets.log` — 168 vertex shaders seen in one gameplay session, one line each:
 
@@ -15,6 +15,26 @@ its whole source tree to exactly this pattern.
 
 It is data this project generated, not game content, so committing it is within the
 never-upload-game-files rule.
+
+## ⚠️ It was not actually in git until 2026-09-03 — the rescue silently failed
+
+The 2026-09-01 copy landed in the working tree but **`dev-archive/.gitignore`'s blanket `*.log`
+rule swallowed it**, so `git add` skipped it without complaint and the file stayed exactly what
+the rescue was meant to stop it being: a single-disk file. It was found on 2026-09-03 while
+clearing `D:\TheEvilWithinVR\captures\`, by checking `git ls-files --error-unmatch` rather than
+trusting that the copy implied a commit. `.gitignore` now carries `!recon/**/*.log` so recon
+evidence cannot be lost this way again `[verified-live 2026-09-03]`.
+
+**The lesson generalises:** copying a file into a repo is not saving it. Only
+`git ls-files --error-unmatch <path>` (or seeing it in a pushed commit) proves it is stored.
+
+## The other two variants are redundant — measured, not assumed
+
+`D:\TheEvilWithinVR\captures\` also held `task5-smoke/mvp_offsets.log` and
+`task5-smoke/mvp_offsets-fixround.log`. Neither was kept, because both are strict **subsets** of
+this file `[verified-numerically 2026-09-03, n=3 tables]`: 167 shaders each against this one's 168,
+**zero** shaders present in a smoke table and absent here, and **zero** disagreements between the
+two smoke tables on any shader they share. This file is the superset, so nothing was discarded.
 
 ## What it shows
 
