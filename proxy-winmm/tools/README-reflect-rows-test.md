@@ -44,7 +44,7 @@ python <repo>/dev-archive/recon/2026-09-03-tangoresource-and-branch-merge/tangor
 
 # 2. build and run
 gcc -O2 -Wall -Wextra -Wno-unused-parameter -o build/reflect_rows_test.exe \
-    test/reflect_rows_test.c src/mvptable.c -ld3dcompiler -ldxguid
+    tools/reflect_rows_test.c src/mvptable.c -ld3dcompiler -ldxguid
 ./build/reflect_rows_test.exe tew_all_shaders.bin tew_expected.txt
 ```
 
