@@ -92,3 +92,60 @@ launcher that only works when invoked in one specific way.
 - **Whether `pool_miss` matters.** §1. The bucketing work is what decides it.
 - **Whether a console exists on this build.** One tilde press against an attract screen is not a test.
 - No VR, no headset, no comfort judgement anywhere in this session.
+
+---
+
+# Part 2 (same day, third launch) — **34 of 34**, and coverage is scene-dependent
+
+The third launch was again started from Steam, so the yaw was again unarmed. Rather than spend it,
+it was used for the verification the identity build *can* do — and it closed the row question
+completely.
+
+## ✅ All 34 scattered shaders now seen, all 34 agree
+
+`mvp_offsets.log` **accumulates across runs** (167 → 168 lines), and the user had played on into
+**Ch.2 "Remnants"** before handing over, which drew the one shader Ch.1 never did.
+
+| | first session | now |
+|---|---|---|
+| shaders with `rows=` | 145 | **146** |
+| flagged non-contiguous | 33 | **34** |
+| present in the static table | 33 of 34 | **34 of 34** |
+| `rows=` **agree** | 33 | **34** |
+| `rows=` **disagree** | 0 | **0** |
+| contiguous-flagged with wrong rows | 0 | **0** |
+
+`[verified-live 2026-09-03, n=34 of 34]` **The static table and the runtime now agree on the
+complete set.** The earlier 33/34 was scene coverage, exactly as suspected, and is closed.
+
+## The counters hold across three samples in two chapters
+
+| sample | patched | no_mvp | pool_miss | rows_incomplete | bounds_fail | draw coverage |
+|---|---|---|---|---|---|---|
+| Ch.1, after a movement pass | 88,421 | 13,829 | 24,574 | **0** | **0** | 69.7 % |
+| Ch.2, static at the pause menu | 245,100 | 15,600 | 39,322 | **0** | **0** | 81.7 % |
+| Ch.2, after a movement pass | 304,394 | 15,594 | 69,687 | **0** | **0** | 78.1 % |
+
+`[verified-live 2026-09-03, n=3 samples, 2 chapters]`
+
+**`shader_rows_incomplete = 0` and `bounds_fail = 0` in every sample.** The fix is not a one-scene
+result.
+
+**And this further undermines the "pool_miss is the ceiling" framing corrected in Part 1**: its share
+swings 13 % → 19 % with scene and with camera motion, and draw coverage moves 69.7 % → 81.7 % the
+same way. A number that moves that much with where you are standing is a property of the scene, not
+a fixed ceiling. It still has to be bucketed before anyone claims it is either harmless or a problem.
+
+## ⚠️ Three launches, three Steam starts — stop asking, fix the proxy
+
+The yaw has now failed to arm three times, every time because the game was started from Steam rather
+than from `launch-yaw-test.bat`. That is the natural way to start a game, and the third repetition of
+the same request would be the wrong response.
+
+**The real fix is `[PD]`: make the proxy read its settings from a config FILE as well as the
+environment.** Every `TEWVR_*` knob is currently environment-only and read at process start, which
+means every one of them is hostage to how the game happens to be launched. A file beside the exe (or
+in `%LOCALAPPDATA%\TEWVR\`) read at the same point would remove that dependency permanently, for
+the yaw and for `TEWVR_DUMP`, `TEWVR_SHADERDUMP`, `TEWVR_SEQDUMP` and the rest.
+
+Until then the visible-override test needs a launch nobody will reliably remember to perform.
