@@ -68,17 +68,38 @@ void mvptable_on_shader_created(uint64_t hash, const void *bytecode, SIZE_T leng
 int mvp_offset_for_shader(const void *vs_ptr);
 
 /* Task 6: like mvp_offset_for_shader(), but hands out ALL FOUR mvpmatrix
- * row offsets at once, and ONLY when they are known to be safely readable
- * as 4 contiguous 16-byte rows (mvpx_offset, +16, +32, +48) - refusing
- * (returning 0) for shaders whose y/z/w rows were reflected at some other,
- * non-contiguous layout, rather than guessing wrong offsets. This is the
- * function mvp_patch.c's real per-draw MVP override actually calls -
- * mvp_offset_for_shader() alone is not enough to patch all 4 rows safely.
- * Returns 1 and fills row_offsets[0..3] on success; returns 0 (leaving
- * row_offsets untouched) if the shader is untracked, has no reflected
- * mvpx_offset, or was not confirmed contiguous. See mvptable.c's own
- * comment above this function for the discovery finding that motivated it. */
+ * row offsets at once. This is the function mvp_patch.c's real per-draw MVP
+ * override actually calls - mvp_offset_for_shader() alone is not enough to
+ * patch all 4 rows safely.
+ *
+ * 2026-09-03: it now returns the rows' ACTUAL reflected offsets rather than
+ * refusing everything that is not contiguous. The original version handed out
+ * {mvpx, +16, +32, +48} and returned 0 whenever y/z/w sat anywhere else,
+ * because the offsets it needed had been computed and then discarded - only a
+ * contiguity boolean was kept. They are kept now, so a non-contiguous layout
+ * is patched at the offsets reflection actually reported instead of being
+ * skipped. Off-disk reflection of every shader in base/common.tangoresource
+ * shows that "non-contiguous" here is overwhelmingly ONE layout - mvpmatrixz
+ * and mvpmatrixw transposed, i.e. rows at {b, b+16, b+48, b+32} - covering 33
+ * of the 34 such shaders a real gameplay session produced. Nothing here
+ * assumes that, though: whatever four offsets reflection reports are what get
+ * used, and the caller bounds-checks every one of them.
+ *
+ * Returns 1 and fills row_offsets[0..3] when the shader is known and all four
+ * mvpmatrix rows were found; returns 0 (leaving row_offsets untouched) if the
+ * shader is untracked or its rows are incomplete. */
 int mvp_row_offsets_for_shader(const void *vs_ptr, int row_offsets[4]);
+
+/* Reflects a DXBC vertex-shader blob and reports cb0's size plus the byte
+ * offsets of mvpmatrix{x,y,z,w} within it (-1 for any row not present).
+ * Returns 1 if a cb0 was found at all, 0 otherwise.
+ *
+ * Split out of mvptable_on_shader_created() so the reflection logic can be
+ * exercised offline, against shaders extracted from the game's own archives,
+ * without a running game - the shipped function itself, not a transcription of
+ * it. Requires nothing but D3DReflect; does not touch the hash table or the
+ * log. */
+int mvptable_reflect_rows(const void *bytecode, SIZE_T length, int *out_cb0_size, int out_rows[4]);
 
 /* Task 6 fix round 3: DIAGNOSTIC-ONLY classification of why
  * mvp_row_offsets_for_shader() would refuse a given shader - added because
@@ -98,10 +119,14 @@ enum MvpShaderStatus {
                                       mvpmatrix at all (mvpx_offset == -1) -
                                       expected for post-process/depth-only
                                       shaders, per Task 4's finding */
-    MVP_SHADER_NONCONTIGUOUS = 2, /* known, has an mvpx_offset, but y/z/w
-                                      were not confirmed contiguous - the
-                                      same refusal mvp_row_offsets_for_shader()
-                                      already makes */
+    MVP_SHADER_ROWS_INCOMPLETE = 2, /* known, has an mvpx_offset, but at least
+                                      one of mvpmatrixy/z/w was not found at
+                                      all, so there is no complete set of four
+                                      offsets to patch with - the same refusal
+                                      mvp_row_offsets_for_shader() makes.
+                                      (Before 2026-09-03 this meant "not
+                                      contiguous", which is no longer a reason
+                                      to refuse anything.) */
     MVP_SHADER_OK = 3             /* known, offsets safe to use - matches
                                       mvp_row_offsets_for_shader()'s success
                                       case; should not normally reach the
