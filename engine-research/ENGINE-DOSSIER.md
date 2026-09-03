@@ -45,29 +45,30 @@ and the assumption throughout was that a runtime dump is the only source.
   `generated/renderprogs/shader_retail/pc/<name>.shaderbin2`, each paired with a `_ws` variant.
   `[verified-numerically 2026-09-03]` The exe corroborates the vocabulary: it contains the literals
   `renderprogs` (×13), `shaderbin` (×2) and `tangoresource` (×1).
-- **Container format, as far as it is reversed.** `[verified-numerically 2026-09-03]`
+- **Container format — SOLVED 2026-09-03.** `[verified-numerically 2026-09-03]`
   ```
-  +0   u32   magic 0x2394ABCD
-  +4   u32   BE entry count (0x00002D2D = 11565 for common.tangoresource)
-  +8   TOC:  count x { u32 LE len, name, u32 LE len, name, u32 hash }
-              -> ends at 0x1902E8; the walk consumed exactly 11565 records,
-                 matching the header count, which is what says the layout is right
-  ...   data region, 48,369,748 bytes, entropy 7.99 bits/byte
-  end   a regular 10-byte-record trailing index (fields increment monotonically)
+  +0        u32   magic 0x2394ABCD
+  +4        u32   BE entry count (0x00002D2D = 11565 for common.tangoresource)
+  +8        TOC:  count x { u32 LE len, name, u32 LE len, name, u32 hash }   -> ends 0x1902E8
+  0x1902F0  data: entries back-to-back, each a HEADERLESS RAW DEFLATE stream
+  0x2F77AB8 offset table: 9001 x { u32 BE file offset, u32 BE csize, u32 BE usize, u32 BE id }
   ```
-- **The payload is raw DEFLATE (headerless).** Decompressing at 0x1902F0 with a raw inflate
-  (`wbits=-15`) yields **916,986 bytes of coherent game data** — `release.cfg` text, then material
-  declarations (`materialid`, `physicalvmtrpagesmap2`) — before desynchronising.
-  `[verified-numerically 2026-09-03]`
-- **⚠️ What is NOT established, and the honest state of the lead.** Entry offsets are **not** in the
-  TOC, so individual entries cannot yet be addressed; the decode above is one continuous run that
-  eventually loses sync, not a per-entry extraction. **Whether a `.shaderbin2` payload contains DXBC
-  at all is unknown** — it may equally be id Tech 5's own IR, in which case this route dies. The
-  archive holds **zero** literal `DXBC` bytes uncompressed, and so does the exe, so if it is there it
-  is behind the compression.
-- **The next step is narrow and decisive:** parse the 10-byte trailing index, extract one
-  `.shaderbin2`, and look at its first four bytes. That is a `[PD]` task; its outcome decides whether
-  §12's "one launch to save shader bytecode" row can be retired without a launch.
+  The offset table is what makes entries addressable. Every record's
+  `offset + csize` equals the next record's `offset`, with no gaps, across all 9001 entries — which
+  is what says the layout is right rather than plausible. 47,203,026 compressed bytes expand to
+  133,454,381. **249 of 9001 entries (2.8%) fail to inflate** and are unexplained; they are not
+  shaders (no shader was lost — see the hash match below), but the residual is real and unclosed.
+  Entries carry no per-entry header: an entry that holds a shader begins
+  `u32 hash, u32 BE size, DXBC…`.
+- **The shaders are DXBC, with reflection intact.** `[verified-numerically 2026-09-03]`
+  2,785 entries in `common.tangoresource` contain DXBC; extracted, they are **2,785 DXBC containers
+  with RDEF reflection**, 603 distinct constant-buffer layouts. `constantBufferV` — this dossier's own
+  name for the per-draw MVP buffer (§6/§7) — appears in **1,208** of them, bound at **`cb0`**, and its
+  rows are **named**: `mvpmatrixx`/`y`/`z`/`w` with explicit byte offsets, alongside
+  `vertexxyzscale`, `vertexxyzbias`, `vertexstscalebias`, `fogstart/end/scale`.
+- **⇒ The §12 shader-bytecode blocker is retired.** See §12; the short version is that every
+  shader's exact MVP row offsets are now readable off disk, no launch involved, and the runtime
+  table this project already had cross-checks against them with **zero disagreements**.
 - **⚠️ A methodology note worth more than the finding.** The first scan looked for zlib-framed
   streams (`0x78 0x9C` etc.), found 3,489 candidate positions, decompressed exactly one, and would
   have been written up as "the archive is not zlib". That test **could not have produced a positive
@@ -348,7 +349,7 @@ through.
     shader count need not be the busiest by draw count. Do not restate the 44% as a draw figure.
     Says nothing about the `pool_miss` residual, which is a buffer-identity problem, not a
     shader-layout one.
-  - **Blocked on one launch.** The reflection table records only a base offset and a contiguity
+  - **~~Blocked on one launch~~ — RETIRED 2026-09-03, see the next bullet.** The reflection table records only a base offset and a contiguity
     flag, so rows 1-3 are not recoverable from it; that needs vertex-shader bytecode, and **none
     was ever saved**. One launch with the shader-dump path, then
     `proxy-winmm/tools/dxbc_disasm.c` offline, turns the table from `(base, contiguous)` into four
@@ -361,8 +362,32 @@ through.
       is the *only* missing input, not the launch plus an unproven tool.
       ⚠️ It lives **only on branch `stereo-6dof-core`** — it is not on `main`, along with 12 other
       source files. See the branch-merge finding in `modding-notes/2026-09-03-...`.
-    - **A second, launch-free route to the same bytecode is now open but unfinished
-      (2026-09-03).** The game ships its shaders on disk after all — see §3a below.
+  - **✅ NO LONGER BLOCKED ON A LAUNCH AT ALL (2026-09-03, `/pd`, static).** The bytecode is on
+    disk. `base/common.tangoresource` was fully unpacked (§3a) and yields **2,785 DXBC shaders with
+    RDEF intact**, of which **1,208 declare `constantBufferV`** with its rows *named*
+    (`mvpmatrixx/y/z/w`) at explicit byte offsets. `[verified-numerically 2026-09-03]`
+    - **The runtime table and the disk agree exactly.** The proxy keys shaders by FNV-1a64 of the
+      DXBC blob (`shaderdump.c`; note the non-standard offset basis `1469598103934665603`).
+      Recomputing that over the extracted shaders matches **167 of the 168** rows in
+      `mvp_offsets.log`, **including all 34 scattered ones**, and the reflected
+      `(constantBufferV size, mvpmatrixx offset)` agrees with the runtime-recorded `(cb0, mvpx)` on
+      **167 of 167 matched rows, zero disagreements**. `[verified-numerically 2026-09-03, n=167]`
+      Two entirely different methods — live reflection through the proxy, and off-disk archive
+      extraction — produce the same table.
+      ⚠️ One of the 168 is absent from `common.tangoresource`; `common` is one of ~20 archives and
+      level-specific ones were not searched, so this is expected rather than explained. Not chased.
+    - **"Scattered" is almost always one specific thing: z and w are SWAPPED.** Of the 34,
+      **33 have their rows at `+0, +16, +48, +32`** relative to `mvpmatrixx`; exactly one
+      (`E73523999ED27D3E`, cb0=80) differs, at `0, 32, 48, 64`.
+      `[verified-numerically 2026-09-03, n=34]` Full per-hash table:
+      `dev-archive/recon/2026-09-03-tangoresource-and-branch-merge/2026-09-03-scattered-mvp-row-offsets.txt`.
+    - **Wider census, for free:** across all 1,208 on-disk `constantBufferV` shaders, 957 (79.2%)
+      are contiguous, 195 (16.1%) scattered, 56 carry no `mvpmatrix` rows.
+      ⚠️ **Do not compare that 79.2% with the runtime table's 66.7%** — different populations (every
+      shader shipped in one archive, versus the 168 a single gameplay session actually created).
+    - **Still NOT established:** that writing the four rows at these offsets renders correctly.
+      Reflection gives the layout; only a run shows the patch behaves. That is the existing
+      keystone/runtime row, not a new blocker.
 - **Shadow writer-concurrency risk, measured safe not structurally guaranteed.**
   The world cb0 shadow's single-writer assumption is false (writes are
   routinely cross-thread) but writes have never been observed truly

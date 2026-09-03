@@ -1,0 +1,31 @@
+constantBufferV shaders: 1208  (distinct layouts: 144)
+  with all four mvpmatrix rows : 1152
+  CONTIGUOUS (x,+16,+32,+48)   : 957  (79.2%)
+  SCATTERED                    : 195  (16.1%)
+  no mvpmatrix rows at all     : 56
+
+top (cb0 size, mvpx offset) shapes, all constantBufferV shaders:
+   cb0=224   mvpx=32     240 shaders
+   cb0=160   mvpx=32     127 shaders
+   cb0=64    mvpx=0      99 shaders
+   cb0=128   mvpx=64     80 shaders
+   cb0=128   mvpx=0      71 shaders
+   cb0=96    mvpx=32     65 shaders
+   cb0=176   mvpx=32     36 shaders
+   cb0=112   mvpx=32     35 shaders
+   cb0=272   mvpx=32     33 shaders
+   cb0=176   mvpx=64     30 shaders
+   cb0=208   mvpx=32     30 shaders
+   cb0=192   mvpx=32     29 shaders
+
+SCATTERED shapes (size, mvpx, row deltas):
+   cb0=128   mvpx=64    rows=+0,+16,+48,+32  77 shaders
+   cb0=176   mvpx=64    rows=+0,+16,+48,+32  30 shaders
+   cb0=272   mvpx=144   rows=+0,+16,+48,+32  18 shaders
+   cb0=240   mvpx=96    rows=+0,+16,+48,+32  16 shaders
+   cb0=192   mvpx=96    rows=+0,+16,+48,+32  15 shaders
+   cb0=208   mvpx=96    rows=+0,+16,+48,+32  13 shaders
+   cb0=80    mvpx=0     rows=+0,+32,+48,+64  9 shaders
+   cb0=304   mvpx=144   rows=+0,+16,+48,+32  9 shaders
+   cb0=224   mvpx=96    rows=+0,+16,+48,+32  5 shaders
+   cb0=144   mvpx=64    rows=+0,+16,+48,+32  3 shaders

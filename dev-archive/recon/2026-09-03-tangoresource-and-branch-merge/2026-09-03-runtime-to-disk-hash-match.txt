@@ -1,0 +1,4 @@
+on-disk shaders: 2785
+distinct hashes: 1232
+runtime shaders matched on disk: 167 / 168  (missed 1)
+of the 34 scattered runtime shaders, matched: 34
