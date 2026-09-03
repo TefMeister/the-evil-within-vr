@@ -53,8 +53,11 @@ current one. Resolution is `--ours`; nothing of value is on the branch side.
 
 **`main` is not the live source. The branch is.** Thirteen files exist only on `stereo-6dof-core`,
 including `mvp_patch.c/h`, `mvptable.c/h`, `camera.c/h`, `shaderdump.c/h`, `seqdump.c/h`,
-`framecapture.c/h` and `tools/dxbc_disasm.c`. `main`'s `mod/proxy-winmm/src/` has no MVP patch in it
-at all — a build from `main` today is a Task-3-era proxy. Every day the branch stays unmerged, the
+`framecapture.c/h` and `tools/dxbc_disasm.c`. `main`'s `mod/proxy-winmm/src/` holds fifteen files and **no MVP
+patch at all** — the newest thing in it is `cbdump.c`, from *Task 4 step 1*, so a build from `main`
+today is a Task-4-era diagnostic proxy. Sharper still: `main` **does** carry the commit "Task 6
+resolved: the Phase 4 keystone proof is passed", so its documentation claims a proof its own source
+cannot produce. Every day the branch stays unmerged, the
 public-facing default branch misrepresents the project, and the tool §12 depends on is unreachable
 from it.
 
@@ -69,8 +72,10 @@ reason for the caution — protecting uncommitted work — no longer applies.
 ## 2. `dxbc_disasm.c` had never been built. It works.
 
 §12's plan for the 34 scattered-row shaders is "one launch with the shader-dump path, then
-`dxbc_disasm.c` offline". The tool is 86 lines, is referenced by **no build script and no
-documentation**, and there is no evidence it had ever been compiled.
+`dxbc_disasm.c` offline". The tool is 86 lines and is referenced by **no build script anywhere in the estate**
+(checked across `*.sh` / `*.bat` / `*.ps1` / `Makefile` in this repo, `staging` and the toolkit), and
+there is no evidence it had ever been compiled. It *is* mentioned in three `dev-archive/notes/` files
+and in the dossier — so it was documented, just never built.
 
 - **Builds clean, zero warnings** (`gcc -O2 -Wall`, llvm-mingw). `[compile-verified 2026-09-03]`
 - **Run end-to-end against a real SM5 DXBC vertex shader**, it loads `d3dcompiler_47.dll`, calls
