@@ -155,12 +155,17 @@
 #define VTBL_DEV_CREATEBUFFER 3
 /* Fix round 4: index 48, matching cbdump.c's and seqdump.c's already-
  * verified ID3D11DeviceContext::UpdateSubresource slot. */
+#define VTBL_CTX_MAP         14
+#define VTBL_CTX_UNMAP       15
 #define VTBL_CTX_UPDATESUBRESOURCE 48
 
 typedef void(STDMETHODCALLTYPE *DrawIndexed_t)(ID3D11DeviceContext *, UINT, UINT, INT);
 typedef void(STDMETHODCALLTYPE *Draw_t)(ID3D11DeviceContext *, UINT, UINT);
 typedef HRESULT(STDMETHODCALLTYPE *CreateBuffer_t)(ID3D11Device *, const D3D11_BUFFER_DESC *,
                                                     const D3D11_SUBRESOURCE_DATA *, ID3D11Buffer **);
+typedef HRESULT (STDMETHODCALLTYPE *Map_t)(ID3D11DeviceContext *, ID3D11Resource *, UINT,
+                                            D3D11_MAP, UINT, D3D11_MAPPED_SUBRESOURCE *);
+typedef void (STDMETHODCALLTYPE *Unmap_t)(ID3D11DeviceContext *, ID3D11Resource *, UINT);
 typedef void(STDMETHODCALLTYPE *UpdateSubresource_t)(ID3D11DeviceContext *, ID3D11Resource *, UINT,
                                                       const D3D11_BOX *, const void *, UINT, UINT);
 
@@ -279,6 +284,71 @@ typedef char mvp_assert_cb_bytes_is_16_aligned[
  * eviction - see the report's Concerns). */
 #define MVP_DIRECT_POOL_MAX 32
 
+/* ---- the per-shader DYNAMIC cb0 path (2026-09-04c) ------------------------
+ *
+ * WHY THIS EXISTS. The pool above tracks only the large shared DEFAULT world
+ * buffer, because UpdateSubresource is the only CPU write path a DEFAULT
+ * buffer has and that is what feeds its shadow. Everything else counted as
+ * `pool_miss` - about a quarter of MVP-bearing draws, the coverage gap in
+ * dossier S6/S11.
+ *
+ * 2026-09-04b measured live what those missed draws actually are, using the
+ * bucketing added that morning: they are NOT harmless small post/UI draws.
+ * `combo[5]` (ByteWidth 160, indexed geometry 750-1016), `combo[7]` (224,
+ * geom 1001), `combo[3]` (272, non-indexed up to 120,000 vertices),
+ * `combo[4]` (304, up to 75,000) - all `Usage=2` (DYNAMIC)
+ * `[verified-live 2026-09-04]`. Those are world meshes, and they render at
+ * the wrong per-eye orientation today.
+ *
+ * The disk census agrees on the shapes: cb0=160 mvpx=32 (127 shaders),
+ * cb0=224 mvpx=32 (240), cb0=272 mvpx=32 (33) and mvpx=144 (18), cb0=304
+ * mvpx=144 (9) - all MVP-bearing, offsets already known
+ * `[inferred-static 2026-09-03, from common.tangoresource]`. So the shaders
+ * are patchable; only the buffer was out of reach.
+ *
+ * A DYNAMIC buffer is written through Map(WRITE_DISCARD)/Unmap, so the fix is
+ * one more shadow SOURCE, not a new patch mechanism: hook Map/Unmap, copy the
+ * mapped contents into a shadow at Unmap while the pointer is still valid, and
+ * the existing draw-time path (look up shadow, apply K, write a scratch
+ * buffer, rebind slot 0) then works unchanged.
+ *
+ * The slots are a PARTITION of the same arrays rather than a second pool, so
+ * every seqlock, validity and tearing guarantee already written and reviewed
+ * applies to them without being duplicated: [0, MVP_DIRECT_POOL_MAX) is the
+ * DEFAULT pool, [MVP_DIRECT_POOL_MAX, +MVP_DYN_POOL_MAX) is this one. The two
+ * finds scan only their own range, so the hot DEFAULT lookup does not get
+ * slower.
+ *
+ * ⚠️ SIZING IS A GUESS. 64 is chosen because the live evidence names four
+ * distinct (size, usage) combos but says nothing about how many distinct
+ * BUFFERS back them - an engine may use a handful of dynamic ring buffers or
+ * one per material. The pool logs when it fills, exactly as the DEFAULT one
+ * does, so the first run says whether 64 was right.
+ *
+ * ⚠️ A KNOWN RISK, NOT DESIGNED AWAY. Two deferred contexts may legally Map
+ * the same ID3D11Buffer at the same time (WRITE_DISCARD renames per context),
+ * and a shadow keyed by buffer pointer cannot represent both. The existing
+ * seqlock detects that as a concurrent write and the draw falls through
+ * unpatched, which is fail-safe rather than wrong - and
+ * `g_diag_shadow_concurrent` counts it, so a run says whether it happens here.
+ * If it does, this path needs a per-context shadow, not a per-buffer one. */
+#define MVP_DYN_POOL_MAX  64
+#define MVP_DYN_MAX_BYTES 512   /* observed 160..304; 512 leaves headroom without
+                                   admitting the large shared buffers */
+#define MVP_POOL_SLOTS_TOTAL (MVP_DIRECT_POOL_MAX + MVP_DYN_POOL_MAX)
+
+/* 2026-09-04c, the DYNAMIC cb0 partition. Two ways this could go wrong
+ * silently, both now build errors:
+ *  - a dynamic buffer wider than the shadow window would be truncated at
+ *    Unmap and then patched from a partial copy;
+ *  - if the two pool sizes and the array size ever drift apart, a dynamic
+ *    slot index would run off the end of every shadow array at once. */
+typedef char mvp_assert_dyn_fits_the_shadow[
+    (MVP_DYN_MAX_BYTES <= MVP_CB_BYTES) ? 1 : -1];
+typedef char mvp_assert_pool_partition_adds_up[
+    (MVP_POOL_SLOTS_TOTAL == MVP_DIRECT_POOL_MAX + MVP_DYN_POOL_MAX) ? 1 : -1];
+
+
 /* Per-thread scratch-buffer sub-rings: MVP_THREADS_MAX comfortably exceeds
  * the 7 threads (6 deferred workers + 1 immediate/render) Task 5's
  * discovery captures ever actually observed; MVP_SLOTS_PER_THREAD matches
@@ -364,6 +434,11 @@ static ULONGLONG g_diag_last_report_ms = 0;        /* only ever touched by which
  * that is defined further down (C tentative definitions - the real
  * definitions, with initializers, follow in their own sections). */
 static int g_direct_pool_count;
+static int g_dyn_pool_count;                  /* 2026-09-04c, defined with the dynamic pool below */
+static volatile LONG g_diag_dyn_patched;
+static volatile LONG g_diag_dyn_empty;
+static volatile LONG g_dyn_shadow_writes;
+static volatile LONG g_diag_map_overflow;
 static int g_update_target_count;
 static volatile LONG g_shadow_writes;
 static volatile LONG g_diag_shadow_empty;
@@ -629,6 +704,20 @@ static void mvp_diag_maybe_report(void) {
                  MVP_DIAG_REPORT_INTERVAL_MS, patched, not_installed, no_vs, shader_unknown,
                  shader_no_mvp, shader_rows_incomplete, no_slot0_buf, pool_miss, bounds_fail,
                  scratch_not_ready, scratch_alloc_fail, scratch_map_fail);
+        /* The DYNAMIC cb0 path (2026-09-04c). `dyn_patched` climbing is the
+         * whole point of it: those are draws that used to land in pool_miss.
+         * `dyn_empty` should fall to ~0 after the first frames - a buffer is
+         * registered at a draw and only fed at the NEXT Map/Unmap, so a steady
+         * non-zero means registration is happening but the writes are not
+         * being seen, i.e. the game fills those buffers some other way. */
+        if (g_dyn_pool_count || g_diag_dyn_patched || g_diag_dyn_empty) {
+            log_msg("mvp_patch: DIAG dynamic cb0 path: pool=%d/%d buffers, shadow writes=%ld, "
+                    "draws patched via it=%ld, registered-but-unfed skips=%ld, "
+                    "pending-map table overflows=%ld",
+                    g_dyn_pool_count, MVP_DYN_POOL_MAX, g_dyn_shadow_writes,
+                    InterlockedExchange(&g_diag_dyn_patched, 0),
+                    InterlockedExchange(&g_diag_dyn_empty, 0), g_diag_map_overflow);
+        }
         if (pool_miss > 0 && (patched == 0 || (++g_miss_report_tick % MVP_MISS_REPORT_EVERY) == 0)) {
             /* Round 4 printed this ONLY while patching was failing outright
              * (misses but no successes), so once patching worked the
@@ -739,10 +828,10 @@ struct DirectPoolEntry {
  * warning ever fires, the precondition above is broken and this shadow
  * needs real synchronisation (a seqlock or per-context shadows) before
  * anything else in the module can be trusted. */
-static unsigned char g_shadow[MVP_DIRECT_POOL_MAX][MVP_CB_BYTES];
+static unsigned char g_shadow[MVP_POOL_SLOTS_TOTAL][MVP_CB_BYTES];
 /* Thread id of the first writer of each shadow slot (0 = none yet), and a
  * one-shot gate so the cross-thread warning cannot spam the log. */
-static volatile LONG g_shadow_writer_tid[MVP_DIRECT_POOL_MAX];
+static volatile LONG g_shadow_writer_tid[MVP_POOL_SLOTS_TOTAL];
 static volatile LONG g_shadow_multiwriter_warned = 0;
 static volatile LONG g_diag_shadow_multiwriter = 0; /* writes seen from a second thread */
 
@@ -774,7 +863,7 @@ static volatile LONG g_diag_shadow_multiwriter = 0; /* writes seen from a second
  * only guarantees the reader never consumes a torn snapshot. If
  * g_diag_shadow_concurrent is ever non-zero, writer/writer exclusion is
  * still required and this is not finished. */
-static volatile LONG g_shadow_seq[MVP_DIRECT_POOL_MAX];
+static volatile LONG g_shadow_seq[MVP_POOL_SLOTS_TOTAL];
 static volatile LONG g_diag_shadow_concurrent = 0; /* a writer found another writer mid-copy */
 static volatile LONG g_diag_shadow_torn = 0;       /* draws skipped: seqlock reported an unstable read */
 static volatile LONG g_shadow_concurrent_warned = 0;
@@ -782,7 +871,7 @@ static volatile LONG g_shadow_concurrent_warned = 0;
  * shadow. mvp_direct_pool_find() refuses to hand out a not-yet-written
  * shadow: patching a draw from an all-zero shadow would apply a confidently
  * wrong zero matrix instead of falling through unpatched. */
-static volatile LONG g_shadow_valid[MVP_DIRECT_POOL_MAX];
+static volatile LONG g_shadow_valid[MVP_POOL_SLOTS_TOTAL];
 static volatile LONG g_shadow_writes = 0;   /* UpdateSubresource calls that fed a pool shadow */
 static volatile LONG g_diag_shadow_empty = 0; /* draws skipped because the shadow had no content yet */
 static volatile LONG g_diag_shadow_partial = 0; /* partial-box (offset) shadow updates handled */
@@ -792,7 +881,7 @@ static volatile LONG g_diag_shadow_partial = 0; /* partial-box (offset) shadow u
  * which is a wrong-data path rather than a skip path. See the note in
  * mvp_maybe_late_hook_ctx(). */
 static volatile LONG g_diag_latehook_after_valid = 0;
-static struct DirectPoolEntry g_direct_pool[MVP_DIRECT_POOL_MAX];
+static struct DirectPoolEntry g_direct_pool[MVP_POOL_SLOTS_TOTAL];
 static int g_direct_pool_count = 0; /* forward-declared above for the round-4 diagnostics */
 static int g_direct_pool_full_warned = 0;
 static CRITICAL_SECTION g_direct_pool_cs; /* guards reservation of a new slot only - see below */
@@ -1498,6 +1587,192 @@ static int ensure_scratch_ready(ID3D11Device *dev) {
     return 1;
 }
 
+/* Like mvp_dyn_pool_find() but WITHOUT the validity check or its counter: the
+ * Map hook needs the slot precisely so it can make it valid, and counting that
+ * as "empty" every frame would bury the real diagnostic. */
+static int mvp_dyn_pool_find_any(ID3D11Buffer *buf, UINT *out_byte_width) {
+    int i, n = g_dyn_pool_count;
+    for (i = 0; i < n; i++) {
+        int slot = MVP_DIRECT_POOL_MAX + i;
+        if (g_direct_pool[slot].buf == buf) {
+            if (out_byte_width) *out_byte_width = g_direct_pool[slot].byte_width;
+            return slot;
+        }
+    }
+    return -1;
+}
+/* ================= the per-shader DYNAMIC cb0 pool ================= */
+/* See the block comment above MVP_DYN_POOL_MAX for why this exists and what
+ * it is NOT designed to survive. Slots live in [MVP_DIRECT_POOL_MAX,
+ * MVP_DIRECT_POOL_MAX + g_dyn_pool_count) of the same arrays as the DEFAULT
+ * pool, so they inherit its seqlock and validity discipline unchanged. */
+/* Definitions for the tentative declarations near the top of the file (the
+ * periodic diagnostic reporter runs above this point and reads them). */
+static int  g_dyn_pool_full_warned = 0;
+
+/* Lock-free, same contract as mvp_direct_pool_find(): returns the SLOT so the
+ * caller can seqlock its read, or -1. */
+static int mvp_dyn_pool_find(ID3D11Buffer *buf, UINT *out_byte_width) {
+    int i, n = g_dyn_pool_count;
+    for (i = 0; i < n; i++) {
+        int slot = MVP_DIRECT_POOL_MAX + i;
+        if (g_direct_pool[slot].buf == buf) {
+            if (!g_shadow_valid[slot]) {
+                /* Registered at a draw, but no Unmap has fed it yet - the
+                 * first draw of a newly-seen buffer is always unpatched, and
+                 * the next frame's Map/Unmap fixes it. Counted separately so
+                 * "never fed" is distinguishable from "not registered". */
+                InterlockedIncrement(&g_diag_dyn_empty);
+                return -1;
+            }
+            *out_byte_width = g_direct_pool[slot].byte_width;
+            return slot;
+        }
+    }
+    return -1;
+}
+
+static void mvp_dyn_pool_try_capture(ID3D11Buffer *buf, UINT byte_width) {
+    int idx, i, slot;
+
+    EnterCriticalSection(&g_direct_pool_cs);
+    for (i = 0; i < g_dyn_pool_count; i++) {
+        if (g_direct_pool[MVP_DIRECT_POOL_MAX + i].buf == buf) {
+            LeaveCriticalSection(&g_direct_pool_cs);
+            return;
+        }
+    }
+    if (g_dyn_pool_count >= MVP_DYN_POOL_MAX) {
+        LeaveCriticalSection(&g_direct_pool_cs);
+        if (!g_dyn_pool_full_warned) {
+            g_dyn_pool_full_warned = 1;
+            log_msg("mvp_patch: DYNAMIC cb0 pool full (%d slots). Further per-shader dynamic "
+                     "constant buffers get no shadow and their draws render UNPATCHED. The size "
+                     "was a guess (see the header); this line means it was too small - raise "
+                     "MVP_DYN_POOL_MAX and rebuild.", MVP_DYN_POOL_MAX);
+        }
+        return;
+    }
+    idx = g_dyn_pool_count++;
+    LeaveCriticalSection(&g_direct_pool_cs);
+
+    slot = MVP_DIRECT_POOL_MAX + idx;
+    ID3D11Buffer_AddRef(buf);   /* released in mvp_patch_remove() with the rest */
+    memset(g_shadow[slot], 0, MVP_CB_BYTES);
+    g_direct_pool[slot].cpu_ptr = g_shadow[slot];
+    g_direct_pool[slot].byte_width = byte_width;
+    InterlockedExchange(&g_shadow_valid[slot], 0);
+    g_direct_pool[slot].buf = buf;   /* published LAST, same convention as the DEFAULT pool */
+
+    log_msg("mvp_patch: registered DYNAMIC cb0 buffer #%d (%u bytes, buf=%p) - its Map/Unmap "
+             "writes are now shadowed, so its draws become patchable from the next write on",
+             idx, byte_width, (void *)buf);
+}
+
+/* Offered from the draw path only - never from CreateBuffer - for the same
+ * reason the DEFAULT pool is: a descriptor alone cannot tell a world cb0 from
+ * any other buffer of the same shape, but "bound at VS slot 0 for a draw whose
+ * shader has known mvp rows" can. */
+static void mvp_try_register_bound_dynamic(ID3D11Buffer *buf) {
+    D3D11_BUFFER_DESC bd;
+
+    memset(&bd, 0, sizeof(bd));
+    ID3D11Buffer_GetDesc(buf, &bd);
+
+    if (!(bd.BindFlags & D3D11_BIND_CONSTANT_BUFFER)) return;
+    if (bd.Usage != D3D11_USAGE_DYNAMIC) return;
+    if (!(bd.CPUAccessFlags & D3D11_CPU_ACCESS_WRITE)) return;
+    if (bd.ByteWidth == 0 || bd.ByteWidth > MVP_DYN_MAX_BYTES) return;
+
+    mvp_dyn_pool_try_capture(buf, bd.ByteWidth);
+}
+
+/* ---- Map / Unmap: the shadow source for the pool above ---- */
+
+#define MVP_PENDING_MAPS 32
+struct PendingMap {
+    ID3D11Resource *res;
+    void           *data;
+    int             slot;
+};
+static struct PendingMap g_pending_map[MVP_PENDING_MAPS];
+static volatile LONG g_diag_map_overflow = 0;
+
+static Map_t   g_map_orig = NULL;
+static Unmap_t g_unmap_orig = NULL;
+
+static HRESULT STDMETHODCALLTYPE Hook_Map(ID3D11DeviceContext *ctx, ID3D11Resource *res,
+                                          UINT sub, D3D11_MAP type, UINT flags,
+                                          D3D11_MAPPED_SUBRESOURCE *mapped) {
+    Map_t orig = g_map_orig;
+    HRESULT hr;
+
+    if (orig == NULL) return E_FAIL;
+    hr = orig(ctx, res, sub, type, flags, mapped);
+
+    /* Only subresource 0 of a buffer already in the dynamic pool is of
+     * interest, and only when the caller actually got a pointer. Everything
+     * else - textures, staging reads, unregistered buffers - falls straight
+     * through having cost one comparison. */
+    if (SUCCEEDED(hr) && sub == 0 && mapped && mapped->pData && res) {
+        UINT bw = 0;
+        int slot = mvp_dyn_pool_find_any((ID3D11Buffer *)res, &bw);
+        if (slot >= 0) {
+            int i, placed = 0;
+            for (i = 0; i < MVP_PENDING_MAPS; i++) {
+                /* Pointer-width CAS: this is a 64-bit process, so claiming the
+                 * slot with the 32-bit InterlockedCompareExchange would
+                 * truncate the resource pointer and match the wrong buffer at
+                 * Unmap. */
+                if (InterlockedCompareExchangePointer((void * volatile *)&g_pending_map[i].res,
+                                                      res, NULL) == NULL) {
+                    g_pending_map[i].data = mapped->pData;
+                    g_pending_map[i].slot = slot;
+                    placed = 1;
+                    break;
+                }
+            }
+            if (!placed) InterlockedIncrement(&g_diag_map_overflow);
+        }
+    }
+    return hr;
+}
+
+static void STDMETHODCALLTYPE Hook_Unmap(ID3D11DeviceContext *ctx, ID3D11Resource *res, UINT sub) {
+    Unmap_t orig = g_unmap_orig;
+    int i;
+
+    /* Copy BEFORE forwarding: once the real Unmap returns, the pointer the
+     * game wrote into is no longer ours to read. */
+    if (sub == 0 && res) {
+        for (i = 0; i < MVP_PENDING_MAPS; i++) {
+            if (g_pending_map[i].res == res) {
+                int slot = g_pending_map[i].slot;
+                void *src = g_pending_map[i].data;
+                UINT cap = g_direct_pool[slot].byte_width;
+                if (cap > MVP_CB_BYTES) cap = MVP_CB_BYTES;
+                if (src && cap) {
+                    mvp_shadow_note_writer(slot);
+                    /* Same seqlock write side as the UpdateSubresource path,
+                     * including the concurrency detection - see there for why
+                     * an even result means two writers are interleaving. */
+                    if ((InterlockedIncrement(&g_shadow_seq[slot]) & 1) == 0) {
+                        InterlockedIncrement(&g_diag_shadow_concurrent);
+                    }
+                    memcpy(g_shadow[slot], src, cap);
+                    InterlockedExchange(&g_shadow_valid[slot], 1);
+                    InterlockedIncrement(&g_shadow_seq[slot]);
+                    InterlockedIncrement(&g_dyn_shadow_writes);
+                }
+                g_pending_map[i].data = NULL;
+                InterlockedExchangePointer((void * volatile *)&g_pending_map[i].res, NULL);
+                break;
+            }
+        }
+    }
+    if (orig) orig(ctx, res, sub);
+}
+
 /* ================= the per-draw patch itself ================= */
 
 /* Shared core for Hook_DrawIndexed/Hook_Draw. On success, patches VS slot 0
@@ -1587,13 +1862,29 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
          * something other than what CreateBuffer captured - logged once,
          * in full, the first time it happens, so a re-round-trip isn't
          * needed to see what that buffer actually looks like. */
+        UINT dyn_bw = 0;
         UINT tick;
+        int dyn_slot = mvp_dyn_pool_find(buf, &dyn_bw);
+        if (dyn_slot >= 0) {
+            /* 2026-09-04c: a per-shader DYNAMIC cb0 whose Map/Unmap writes we
+             * shadow. From here the path is IDENTICAL to the DEFAULT pool's -
+             * the bounds check, the seqlocked read, the K multiply, the scratch
+             * write and the rebind all follow below unchanged. */
+            shadow_slot = dyn_slot;
+            byte_width = dyn_bw;
+            InterlockedIncrement(&g_diag_dyn_patched);
+            goto have_shadow;
+        }
         InterlockedIncrement(&g_diag_pool_miss);
         tick = (UINT)InterlockedIncrement(&g_miss_sample_tick);
         if ((tick & MVP_REGISTER_PROBE_MASK) == 0) {
             /* Fix round 4b: this is where world cb0 buffers get into the
              * pool - see mvp_try_register_bound_buffer(). */
             mvp_try_register_bound_buffer(buf);
+            /* 2026-09-04c: and the per-shader DYNAMIC ones, which the DEFAULT
+             * filter deliberately rejects. Same "register from the draw path,
+             * never from the descriptor alone" rule. */
+            mvp_try_register_bound_dynamic(buf);
         }
         if ((tick & MVP_MISS_SAMPLE_MASK) == 0) {
             /* fix round 4: what IS this buffer, and did our hook see it
@@ -1623,6 +1914,7 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
         return 0;
     }
 
+have_shadow:
     /* Important finding #4 fix: bound-check the shader's reflected row
      * offsets against the REAL bound buffer's own size (captured at
      * CreateBuffer time), not just our fixed MVP_CB_BYTES window - a
@@ -1895,6 +2187,20 @@ void mvp_patch_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx) 
     ok_cb = hook_one(dev_vtbl[VTBL_DEV_CREATEBUFFER], (void *)&Hook_CreateBuffer, (void **)&g_createbuffer_orig,
                       "mvp_patch ID3D11Device::CreateBuffer");
 
+    /* 2026-09-04c: Map/Unmap, the shadow source for the per-shader DYNAMIC cb0
+     * pool. Vtable slots 14/15, read from the SDK header's own
+     * ID3D11DeviceContextVtbl rather than assumed. Not gated below: if these
+     * fail the DEFAULT path is unaffected and the dynamic pool simply never
+     * becomes valid, which its own counters report. */
+    if (!hook_one(ctx_vtbl[VTBL_CTX_MAP], (void *)&Hook_Map, (void **)&g_map_orig,
+                  "mvp_patch ID3D11DeviceContext::Map") ||
+        !hook_one(ctx_vtbl[VTBL_CTX_UNMAP], (void *)&Hook_Unmap, (void **)&g_unmap_orig,
+                  "mvp_patch ID3D11DeviceContext::Unmap")) {
+        log_msg("mvp_patch: Map/Unmap hook failed - the per-shader DYNAMIC cb0 path is INERT this "
+                "run (those draws render unpatched, exactly as before 2026-09-04c). The DEFAULT "
+                "world-buffer path is unaffected.");
+    }
+
     /* Fix round 4: the immediate/dummy flavor's UpdateSubresource. Deferred
      * contexts get theirs late-hooked on their first draw (see
      * mvp_maybe_late_hook_ctx) - this one covers the immediate context and
@@ -1984,6 +2290,17 @@ void mvp_patch_remove(void) {
 
     if (g_direct_pool_cs_ready) {
         EnterCriticalSection(&g_direct_pool_cs);
+        /* The DYNAMIC pool holds its own AddRef per slot, exactly like the
+         * DEFAULT one, and lives in the upper partition of the same array. */
+        for (i = 0; i < g_dyn_pool_count; i++) {
+            int slot = MVP_DIRECT_POOL_MAX + i;
+            if (g_direct_pool[slot].buf != NULL) {
+                ID3D11Buffer_Release(g_direct_pool[slot].buf);
+                g_direct_pool[slot].buf = NULL;
+                InterlockedExchange(&g_shadow_valid[slot], 0);
+            }
+        }
+        g_dyn_pool_count = 0;
         for (i = 0; i < g_direct_pool_count; i++) {
             if (g_direct_pool[i].buf != NULL) {
                 /* Fix round 4: nothing to Unmap any more - this module no
