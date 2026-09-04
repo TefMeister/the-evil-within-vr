@@ -1,5 +1,6 @@
 #include <windows.h>
 #include "log.h"
+#include "config.h"
 #include "winmm_forward.h"
 #include "hooks.h"
 #include "seqdump.h"
@@ -36,6 +37,9 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved) {
         DisableThreadLibraryCalls(inst);
         log_init();              /* logger up first, so winmm_forward_init()'s own
                                      failure diagnostics (log_msg calls) are never lost */
+        config_load();           /* tewvr.ini (beside the exe, then %LOCALAPPDATA%\TEWVR) -
+                                     every TEWVR_* knob is read through tewvr_getenv() from
+                                     here on, so a Steam launch can arm them too; see config.h */
         winmm_forward_init();    /* resolve real winmm */
         log_msg("TEWVR winmm proxy attached (pid=%lu)", GetCurrentProcessId());
 

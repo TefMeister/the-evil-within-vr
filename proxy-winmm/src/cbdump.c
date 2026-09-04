@@ -10,6 +10,7 @@
 #include "MinHook.h"
 #include "minhook_glue.h"
 #include "log.h"
+#include "config.h"
 
 /* ---- ID3D11DeviceContext vtable indices (verified against d3d11.h: 3
  * IUnknown slots + 4 ID3D11DeviceChild slots = 7, then the interface's own
@@ -496,17 +497,17 @@ void cbdump_install(ID3D11DeviceContext *dummy_ctx) {
     }
     g_cb_installed = 1;
 
-    len = GetEnvironmentVariableA("TEWVR_DUMP", flag, sizeof(flag));
+    len = tewvr_getenv("TEWVR_DUMP", flag, sizeof(flag));
     if (len == 0 || len >= sizeof(flag) || strcmp(flag, "1") != 0) {
         return; /* off by default: touch nothing */
     }
 
     {
         char ts[32];
-        DWORD tl = GetEnvironmentVariableA("TEWVR_TARGETSIZE", ts, sizeof(ts));
+        DWORD tl = tewvr_getenv("TEWVR_TARGETSIZE", ts, sizeof(ts));
         if (tl > 0 && tl < sizeof(ts)) {
             g_target_size = atoi(ts);
-            tl = GetEnvironmentVariableA("TEWVR_TARGETOFF", ts, sizeof(ts));
+            tl = tewvr_getenv("TEWVR_TARGETOFF", ts, sizeof(ts));
             if (tl > 0 && tl < sizeof(ts)) {
                 g_target_off = atoi(ts);
             }
@@ -516,7 +517,7 @@ void cbdump_install(ID3D11DeviceContext *dummy_ctx) {
     }
     {
         char fc[8];
-        DWORD fl = GetEnvironmentVariableA("TEWVR_FINDCAM", fc, sizeof(fc));
+        DWORD fl = tewvr_getenv("TEWVR_FINDCAM", fc, sizeof(fc));
         if (fl > 0 && fl < sizeof(fc) && strcmp(fc, "1") == 0) {
             g_bind_logging = 1;
             log_msg("cbdump: FINDCAM on -> counting VS constant-buffer binds");

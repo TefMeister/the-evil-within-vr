@@ -1,12 +1,15 @@
 ﻿#include "mvp_patch.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "MinHook.h"
 #include "minhook_glue.h"
 #include "log.h"
+#include "config.h"
 #include "mvptable.h"
+#include "shaderdump.h"
 #include "camera.h"
 
 /*
@@ -333,6 +336,8 @@ static volatile LONG g_diag_scratch_map_fail = 0;    /* exit: scratch Map(WRITE_
 static volatile LONG g_diag_patched = 0;             /* success: a draw was actually patched */
 
 static volatile LONG g_pool_miss_first_logged = 0; /* sticky one-shot gate for the detailed first-miss log */
+#define MVP_MISS_REPORT_EVERY 6 /* bucketed miss table every 6th 5-second window (~30 s) while misses continue */
+static LONG g_miss_report_tick = 0; /* only touched under g_diag_report_gate */
 static volatile LONG g_diag_report_gate = 0;       /* ensures only one thread performs a given periodic report */
 static ULONGLONG g_diag_last_report_ms = 0;        /* only ever touched by whichever thread currently holds g_diag_report_gate */
 
@@ -380,10 +385,32 @@ struct SeenCb {
 static struct SeenCb g_seen_cb[MVP_SEEN_CB_MAX];
 static volatile LONG g_seen_cb_count = 0;
 
+/* 2026-09-04: what the missed DRAWS look like, per combo - the question the
+ * size/usage buckets alone cannot answer ("do the missed draws carry world
+ * geometry?"). Two cheap proxies for "geometry", both from arguments the
+ * draw hook already has in hand:
+ *   - the draw's index/vertex count: a full-screen quad is 3-6, a particle
+ *     or UI sprite a few dozen, a world mesh hundreds to tens of thousands;
+ *   - the VERTEX SHADER's hash, which names the shader family offline via
+ *     dev-archive/recon/2026-09-03-tangoresource-and-branch-merge/ (the
+ *     runtime hash matches the on-disk archive 167/168) - a missed draw
+ *     using the same world-mesh shader that is patched elsewhere IS world
+ *     geometry, whatever its size. */
+#define MVP_MISS_GEOM_MIN_COUNT 300 /* >= 100 triangles indexed: "real mesh", not a sprite/quad */
+#define MVP_MISS_TINY_MAX_COUNT 6   /* <= 2 triangles: full-screen pass or a billboard */
+#define MVP_MISS_SHADERS_PER_COMBO 8
 struct MissCombo {
     UINT byte_width, usage, bind, cpu;
     LONG seen_created;   /* sampled misses whose buffer WAS created through our hook */
     LONG unseen_created; /* sampled misses whose buffer was NEVER seen by our hook */
+    LONG draws_geom;     /* sampled misses with count >= MVP_MISS_GEOM_MIN_COUNT */
+    LONG draws_tiny;     /* sampled misses with count <= MVP_MISS_TINY_MAX_COUNT */
+    LONG draws_nonindexed; /* sampled misses that came through Draw, not DrawIndexed */
+    volatile LONG max_count; /* largest index/vertex count seen in this combo */
+    uint64_t sh_hash[MVP_MISS_SHADERS_PER_COMBO]; /* distinct vertex shaders seen missing here */
+    LONG sh_hits[MVP_MISS_SHADERS_PER_COMBO];
+    volatile LONG sh_count;
+    LONG sh_overflow;    /* sampled misses whose shader did not fit the per-combo set */
 };
 static struct MissCombo g_miss_combo[MVP_MISS_COMBO_MAX];
 static volatile LONG g_miss_combo_count = 0;
@@ -423,7 +450,52 @@ static int mvp_seen_cb_contains(ID3D11Buffer *buf) {
  * distinct (size, usage, bind, cpu) combo and tallies whether our hook ever
  * saw it created. Lock-free; a rare duplicate combo row under a race is
  * harmless for a diagnostic. */
-static void mvp_miss_sample(ID3D11Buffer *buf) {
+/* Per-combo draw-shape + shader tallies (2026-09-04). Lock-free like the
+ * rest; a lost increment or a duplicate shader row under a race is harmless
+ * for a diagnostic. */
+static void mvp_miss_combo_tally(struct MissCombo *c, int seen, uint64_t vs_hash, UINT count,
+                                 int indexed) {
+    LONG j, sn, cur;
+
+    InterlockedIncrement(seen ? &c->seen_created : &c->unseen_created);
+    if (count >= MVP_MISS_GEOM_MIN_COUNT) {
+        InterlockedIncrement(&c->draws_geom);
+    } else if (count <= MVP_MISS_TINY_MAX_COUNT) {
+        InterlockedIncrement(&c->draws_tiny);
+    }
+    if (!indexed) {
+        InterlockedIncrement(&c->draws_nonindexed);
+    }
+    do {
+        cur = c->max_count;
+        if ((LONG)count <= cur) {
+            break;
+        }
+    } while (InterlockedCompareExchange(&c->max_count, (LONG)count, cur) != cur);
+
+    if (vs_hash == 0) {
+        return; /* untracked shader - cannot name it, nothing to record */
+    }
+    sn = c->sh_count;
+    if (sn > MVP_MISS_SHADERS_PER_COMBO) {
+        sn = MVP_MISS_SHADERS_PER_COMBO;
+    }
+    for (j = 0; j < sn; j++) {
+        if (c->sh_hash[j] == vs_hash) {
+            InterlockedIncrement(&c->sh_hits[j]);
+            return;
+        }
+    }
+    j = InterlockedIncrement(&c->sh_count) - 1;
+    if (j < 0 || j >= MVP_MISS_SHADERS_PER_COMBO) {
+        InterlockedIncrement(&c->sh_overflow);
+        return;
+    }
+    c->sh_hits[j] = 1;
+    c->sh_hash[j] = vs_hash; /* published last */
+}
+
+static void mvp_miss_sample(ID3D11Buffer *buf, uint64_t vs_hash, UINT count, int indexed) {
     D3D11_BUFFER_DESC bd;
     LONG i, n, idx;
     int seen;
@@ -439,7 +511,7 @@ static void mvp_miss_sample(ID3D11Buffer *buf) {
     for (i = 0; i < n; i++) {
         if (g_miss_combo[i].byte_width == bd.ByteWidth && g_miss_combo[i].usage == (UINT)bd.Usage &&
             g_miss_combo[i].bind == bd.BindFlags && g_miss_combo[i].cpu == bd.CPUAccessFlags) {
-            InterlockedIncrement(seen ? &g_miss_combo[i].seen_created : &g_miss_combo[i].unseen_created);
+            mvp_miss_combo_tally(&g_miss_combo[i], seen, vs_hash, count, indexed);
             return;
         }
     }
@@ -451,11 +523,7 @@ static void mvp_miss_sample(ID3D11Buffer *buf) {
     g_miss_combo[idx].usage = (UINT)bd.Usage;
     g_miss_combo[idx].bind = bd.BindFlags;
     g_miss_combo[idx].cpu = bd.CPUAccessFlags;
-    if (seen) {
-        g_miss_combo[idx].seen_created = 1;
-    } else {
-        g_miss_combo[idx].unseen_created = 1;
-    }
+    mvp_miss_combo_tally(&g_miss_combo[idx], seen, vs_hash, count, indexed);
     g_miss_combo[idx].byte_width = bd.ByteWidth; /* published last (its non-zero-ness is not
                                                      relied on, but keeps the same convention) */
 }
@@ -477,10 +545,35 @@ static void mvp_diag_report_misses(void) {
              g_diag_shadow_multiwriter, g_diag_shadow_concurrent, g_diag_shadow_torn,
              g_diag_latehook_after_valid);
     for (i = 0; i < n; i++) {
+        const struct MissCombo *c = &g_miss_combo[i];
+        LONG sampled = c->seen_created + c->unseen_created;
+        LONG j, sn = c->sh_count;
+        char shaders[MVP_MISS_SHADERS_PER_COMBO * 28 + 32];
+        int pos = 0;
+
+        if (sn > MVP_MISS_SHADERS_PER_COMBO) {
+            sn = MVP_MISS_SHADERS_PER_COMBO;
+        }
+        shaders[0] = '\0';
+        for (j = 0; j < sn && c->sh_hash[j] != 0; j++) {
+            pos += snprintf(shaders + pos, sizeof(shaders) - (size_t)pos, "%s%016llX x%ld", j ? " " : "",
+                            (unsigned long long)c->sh_hash[j], c->sh_hits[j]);
+            if ((size_t)pos >= sizeof(shaders)) {
+                break;
+            }
+        }
         log_msg("mvp_patch: DIAG miss-combo[%ld]: ByteWidth=%u Usage=%u BindFlags=0x%X CPUAccess=0x%X "
                  "| sampled misses: created-through-our-hook=%ld NEVER-seen-by-our-hook=%ld",
-                 i, g_miss_combo[i].byte_width, g_miss_combo[i].usage, g_miss_combo[i].bind,
-                 g_miss_combo[i].cpu, g_miss_combo[i].seen_created, g_miss_combo[i].unseen_created);
+                 i, c->byte_width, c->usage, c->bind, c->cpu, c->seen_created, c->unseen_created);
+        /* 2026-09-04: the draw-shape and shader-identity half. `sampled` is
+         * 1-in-256 of the real miss count for this combo, so multiply by
+         * ~256 for absolute draws; the RATIOS are what matter. */
+        log_msg("mvp_patch: DIAG miss-combo[%ld] draws: sampled=%ld geom(count>=%d)=%ld tiny(count<=%d)=%ld "
+                 "non-indexed=%ld max_count=%ld | vertex shaders: %s%s",
+                 i, sampled, MVP_MISS_GEOM_MIN_COUNT, c->draws_geom, MVP_MISS_TINY_MAX_COUNT,
+                 c->draws_tiny, c->draws_nonindexed, c->max_count,
+                 shaders[0] ? shaders : "(none tracked)",
+                 c->sh_overflow ? " (+more, per-combo shader set full)" : "");
     }
 }
 
@@ -536,9 +629,16 @@ static void mvp_diag_maybe_report(void) {
                  MVP_DIAG_REPORT_INTERVAL_MS, patched, not_installed, no_vs, shader_unknown,
                  shader_no_mvp, shader_rows_incomplete, no_slot0_buf, pool_miss, bounds_fail,
                  scratch_not_ready, scratch_alloc_fail, scratch_map_fail);
-        if (pool_miss > 0 && patched == 0) {
-            /* Only while the round-4 mystery is actually happening (misses
-             * but no successes) - goes quiet by itself once patching works. */
+        if (pool_miss > 0 && (patched == 0 || (++g_miss_report_tick % MVP_MISS_REPORT_EVERY) == 0)) {
+            /* Round 4 printed this ONLY while patching was failing outright
+             * (misses but no successes), so once patching worked the
+             * bucketed table was never seen again - and the one question it
+             * exists to answer (2026-09-03f: do the MISSED draws carry world
+             * geometry, or are they the expected small per-shader dynamic
+             * cb0s?) went unmeasured in every working session. Since
+             * 2026-09-04 it also prints every MVP_MISS_REPORT_EVERY windows
+             * while misses continue, and once more at shutdown. Same
+             * failing-case behaviour as before. */
             mvp_diag_report_misses();
         }
     }
@@ -1416,8 +1516,10 @@ static int ensure_scratch_ready(ID3D11Device *dev) {
  * observability, no behaviour change. mvp_diag_maybe_report() is called
  * once, unconditionally, near the top, so it runs regardless of which exit
  * this particular call takes. */
-static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_buf) {
+static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_buf,
+                             UINT draw_count, int draw_indexed) {
     ID3D11VertexShader *vs = NULL;
+    const void *vs_key = NULL; /* pointer VALUE only, kept for the sampled miss path's hash lookup */
     ID3D11Buffer *buf = NULL;
     int offs[4];
     int shadow_slot;
@@ -1465,6 +1567,7 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
         ID3D11VertexShader_Release(vs);
         return 0; /* unknown shader, or an incomplete set of rows we refuse to guess at */
     }
+    vs_key = vs;
     ID3D11VertexShader_Release(vs);
 
     ID3D11DeviceContext_VSGetConstantBuffers(ctx, 0, 1, &buf);
@@ -1493,7 +1596,13 @@ static int mvp_patch_prepare(ID3D11DeviceContext *ctx, ID3D11Buffer **out_orig_b
             mvp_try_register_bound_buffer(buf);
         }
         if ((tick & MVP_MISS_SAMPLE_MASK) == 0) {
-            mvp_miss_sample(buf); /* fix round 4: what IS this buffer, and did our hook see it created? */
+            /* fix round 4: what IS this buffer, and did our hook see it
+             * created? 2026-09-04: and what is the DRAW - how big, which
+             * shader - so the missed path can be told from world geometry.
+             * The hash lookup is by pointer value in shaderdump's table,
+             * which is exactly how mvp_row_offsets_for_shader() found this
+             * shader a moment ago; the object itself is not touched. */
+            mvp_miss_sample(buf, shaderdump_hash_for_shader(vs_key), draw_count, draw_indexed);
         }
         if (InterlockedCompareExchange(&g_pool_miss_first_logged, 1, 0) == 0) {
             D3D11_BUFFER_DESC bd;
@@ -1666,7 +1775,7 @@ static void STDMETHODCALLTYPE Hook_DrawIndexed(ID3D11DeviceContext *ctx, UINT In
      * UpdateSubresource. Cheap after the first call per context. */
     mvp_maybe_late_hook_ctx(ctx);
 
-    patched = mvp_patch_prepare(ctx, &orig_buf);
+    patched = mvp_patch_prepare(ctx, &orig_buf, IndexCount, 1);
 
     orig(ctx, IndexCount, StartIndexLocation, BaseVertexLocation);
 
@@ -1688,7 +1797,7 @@ static void STDMETHODCALLTYPE Hook_Draw(ID3D11DeviceContext *ctx, UINT VertexCou
 
     mvp_maybe_late_hook_ctx(ctx); /* see Hook_DrawIndexed */
 
-    patched = mvp_patch_prepare(ctx, &orig_buf);
+    patched = mvp_patch_prepare(ctx, &orig_buf, VertexCount, 0);
 
     orig(ctx, VertexCount, StartVertexLocation);
 
@@ -1830,7 +1939,7 @@ void mvp_patch_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx) 
     /* TEWVR_TEST_YAW: read once here, synchronously, on the bootstrap
      * thread - strictly before the hooks just enabled above can possibly
      * be reached by a real draw. */
-    len = GetEnvironmentVariableA("TEWVR_TEST_YAW", flagbuf, sizeof(flagbuf));
+    len = tewvr_getenv("TEWVR_TEST_YAW", flagbuf, sizeof(flagbuf));
     deg = (len > 0 && len < sizeof(flagbuf)) ? (float)atof(flagbuf) : 0.0f;
     if (deg != 0.0f) {
         g_K = mat4_rotation_y(deg);
@@ -1838,7 +1947,7 @@ void mvp_patch_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx) 
                  (double)deg);
     } else {
         g_K = mat4_identity();
-        log_msg("mvp_patch: TEWVR_TEST_YAW unset/0 -> K = identity "
+        log_msg("mvp_patch: TEWVR_TEST_YAW unset/0 (neither the environment nor tewvr.ini set it) -> K = identity "
                  "(read/patch/rebind mechanism still exercised every patchable draw; no visible change expected)");
     }
 
@@ -1861,6 +1970,17 @@ void mvp_patch_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx) 
  * dependency on this side too, since it was previously implicit. */
 void mvp_patch_remove(void) {
     int i;
+
+    /* 2026-09-04: the bucketed miss table one last time, so a session's
+     * whole picture is in the log however the periodic 30-second cadence
+     * happened to line up with the quit. Runs before any trampoline is
+     * torn down (hooks_remove() calls mh_glue_shutdown() first, and this
+     * after it), so no draw can be mid-sample here. */
+    if (g_miss_combo_count > 0) {
+        log_msg("mvp_patch: DIAG final bucketed pool-miss table at shutdown (cumulative, 1-in-%d sampled):",
+                MVP_MISS_SAMPLE_MASK + 1);
+        mvp_diag_report_misses();
+    }
 
     if (g_direct_pool_cs_ready) {
         EnterCriticalSection(&g_direct_pool_cs);

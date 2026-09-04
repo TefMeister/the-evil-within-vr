@@ -1,0 +1,45 @@
+# The Evil Within VR proxy (winmm.dll) - settings file
+#
+# Copy this file to tewvr.ini in ONE of these two places:
+#   1. beside EvilWithin.exe (the game folder, next to winmm.dll)   <- wins over 2.
+#   2. %LOCALAPPDATA%\TEWVR\tewvr.ini (next to tewvr.log)
+# The proxy reads both at start-up, so a launch from Steam picks them up just
+# like a launch from a script. An environment variable of the same name still
+# wins over the file (launch-yaw-test.bat keeps working unchanged).
+#
+# Every setting is OFF unless you uncomment it. Keys are case-insensitive and
+# the TEWVR_ prefix is optional (TEST_YAW and TEWVR_TEST_YAW are the same key).
+# An empty value ("TEST_YAW=") counts as unset. Put comments on their own
+# line, not after a value. tewvr.log says which file each setting came from.
+#
+# The file is read ONCE, when the game starts. Edit it, then relaunch.
+
+# --- the visible camera-override test (2026-09-03 FLAT row) -----------------
+# Rotate every patched draw about the vertical axis by this many degrees. The
+# game looks WRONG ON PURPOSE while this is set: it proves the override reaches
+# the screen. Anything that does NOT rotate with the world is geometry the
+# patch still misses. Set to 0 or comment out for normal play.
+#TEST_YAW = 90
+
+# --- diagnostics (each writes its own file into %LOCALAPPDATA%\TEWVR) --------
+# Task 4 constant-buffer dump (cbdump.log). Heavy; not for normal play.
+#DUMP = 1
+# ...with DUMP=1, log VS constant-buffer binds to find the camera buffer.
+#FINDCAM = 1
+# ...with DUMP=1, probe one buffer by size and float offset.
+#TARGETSIZE = 1920
+#TARGETOFF = 0
+
+# Task 5 shader blob dump + per-shader stats (shaders\*.dxbc).
+#SHADERDUMP = 1
+
+# Task 5 ordered per-draw D3D11 event stream (seqdump.log), arming ~300 frames
+# after the first Present...
+#SEQDUMP = 1
+# ...or, with SEQDUMP=1, arm it by creating %LOCALAPPDATA%\TEWVR\seqarm.txt instead.
+#SEQDUMP_ARMFILE = 1
+# ...with SEQDUMP=1, also read constant-buffer CONTENT at draw time (capped).
+#CBPEEK = 1
+
+# Back-buffer capture to disk, triggered by creating %LOCALAPPDATA%\TEWVR\capture.txt.
+#FRAMECAPTURE = 1
