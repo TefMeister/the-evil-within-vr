@@ -11,6 +11,7 @@
 #include "MinHook.h"
 #include "minhook_glue.h"
 #include "log.h"
+#include "config.h"
 #include "d3d_capture.h"
 #include "shaderdump.h"
 #include "mvptable.h"
@@ -1619,7 +1620,7 @@ void seqdump_install(ID3D11DeviceContext *dummy_ctx) {
     }
     g_seq_installed = 1;
 
-    len = GetEnvironmentVariableA("TEWVR_SEQDUMP", flag, sizeof(flag));
+    len = tewvr_getenv("TEWVR_SEQDUMP", flag, sizeof(flag));
     if (len == 0 || len >= sizeof(flag) || strcmp(flag, "1") != 0) {
         return; /* off by default: touch nothing */
     }
@@ -1631,7 +1632,7 @@ void seqdump_install(ID3D11DeviceContext *dummy_ctx) {
 
     {
         char aflag[8];
-        DWORD alen = GetEnvironmentVariableA("TEWVR_SEQDUMP_ARMFILE", aflag, sizeof(aflag));
+        DWORD alen = tewvr_getenv("TEWVR_SEQDUMP_ARMFILE", aflag, sizeof(aflag));
         g_seq_armfile_mode = (alen > 0 && alen < sizeof(aflag) && strcmp(aflag, "1") == 0);
     }
 
@@ -1641,7 +1642,7 @@ void seqdump_install(ID3D11DeviceContext *dummy_ctx) {
          * since CBPEEK reuses seqdump's own Draw/VSSetCB/VSSetShader
          * hooks and armed/capture state. */
         char cflag[8];
-        DWORD clen = GetEnvironmentVariableA("TEWVR_CBPEEK", cflag, sizeof(cflag));
+        DWORD clen = tewvr_getenv("TEWVR_CBPEEK", cflag, sizeof(cflag));
         g_cbpeek_enabled = (clen > 0 && clen < sizeof(cflag) && strcmp(cflag, "1") == 0);
     }
 

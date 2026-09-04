@@ -9,6 +9,7 @@
 #include <dxgi.h>
 
 #include "log.h"
+#include "config.h"
 #include "d3d_capture.h"
 
 #define FRAMECAPTURE_CHECK_FRAMES 30
@@ -236,7 +237,7 @@ void framecapture_on_present(UINT64 frame_number) {
 
     if (!g_fc_env_checked) {
         char flag[8];
-        DWORD len = GetEnvironmentVariableA("TEWVR_FRAMECAPTURE", flag, sizeof(flag));
+        DWORD len = tewvr_getenv("TEWVR_FRAMECAPTURE", flag, sizeof(flag));
         g_fc_enabled = (len > 0 && len < sizeof(flag) && strcmp(flag, "1") == 0);
         g_fc_env_checked = 1;
         if (g_fc_enabled) {

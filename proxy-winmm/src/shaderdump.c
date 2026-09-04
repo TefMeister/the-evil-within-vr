@@ -7,6 +7,7 @@
 #include "MinHook.h"
 #include "minhook_glue.h"
 #include "log.h"
+#include "config.h"
 #include "mvptable.h"
 
 /* ---- vtable indices (same verified counting scheme as cbdump.c) ----
@@ -395,9 +396,9 @@ void shaderdump_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx)
     }
     g_sd_installed = 1;
 
-    len = GetEnvironmentVariableA("TEWVR_SHADERDUMP", flag, sizeof(flag));
+    len = tewvr_getenv("TEWVR_SHADERDUMP", flag, sizeof(flag));
     shaderdump_on = (len > 0 && len < sizeof(flag) && strcmp(flag, "1") == 0);
-    len = GetEnvironmentVariableA("TEWVR_SEQDUMP", flag, sizeof(flag));
+    len = tewvr_getenv("TEWVR_SEQDUMP", flag, sizeof(flag));
     seqdump_on = (len > 0 && len < sizeof(flag) && strcmp(flag, "1") == 0);
 
     /* Task 6: the old "!shaderdump_on && !seqdump_on -> return, touch
