@@ -1,0 +1,24 @@
+Which live shaders would the DYNAMIC cb0 path reach? (2026-09-04c, /pd, static)
+
+Source: C:\Users\Tefa\AppData\Local/TEWVR/mvp_offsets.log, the accumulated runtime shader table, 167 entries.
+The four sizes are the ones 2026-09-04b's bucketed pool-miss dump named as
+carrying real geometry: ByteWidth 160, 224, 272, 304, all Usage=2 DYNAMIC.
+
+  shaders in the table          : 167
+  no mvpmatrix at all (mvpx=-1) : 22
+  MVP-bearing                   : 145
+  declaring cb0 at one of the 4 : 61  (42.1% of MVP-bearing)
+     of which scattered z/w     : 8  (handled since 2026-09-03)
+
+  breakdown by declared cb0 size:
+     cb0=224   33 shaders
+     cb0=160   18 shaders
+     cb0=272    8 shaders
+     cb0=304    2 shaders
+
+Every one of these has a complete, reflected four-row set already recorded,
+so they are patchable the moment the buffer their cb0 lives in is reachable.
+
+WARNING: these are SHADER counts, not DRAW counts. The ~74-77% draw-coverage
+figure in the dossier is a different population and the two must not be mixed.
+What this bounds is how much of the shader table the new path can address.
