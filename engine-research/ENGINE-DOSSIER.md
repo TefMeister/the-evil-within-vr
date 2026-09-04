@@ -176,7 +176,21 @@ and the assumption throughout was that a runtime dump is the only source.
     `DYNAMIC` cb0 is expected. Whether the missed draws carry world geometry was unmeasurable
     because the bucketed miss table printed only while `patched == 0`; **since 2026-09-04 it
     prints every ~30 s and at shutdown, and each bucket also records draw sizes and vertex-shader
-    hashes** — see §12. `[compile-verified 2026-09-04]`, not run.
+    hashes** — see §12.
+  - **✅ NOW MEASURED LIVE 2026-09-04b (`/lm`, Chapter 1): the missed `pool_miss` buckets DO carry
+    real world geometry — the residual is NOT harmless.** Per ~5 s: **~590,000 draws patched** vs only
+    **~13,600 `shader_no_mvp`** skips (the sole skip reason; `not_installed`/`no_vs`/`shader_unknown`/
+    `rows_incomplete`/`no_slot0` all 0). The one `DEFAULT`/`Usage=0` bucket is `ByteWidth=1920` — inside
+    the known 1856–1984 B world-pool range, 2 misses, expected. But several `DYNAMIC`/`Usage=2` cb0
+    buckets carry substantial geometry: `combo[5]` (BW 160) `geom(count>=300)=750–1016, max_count=39102`;
+    `combo[7]` (BW 224) `geom=1001`; `combo[3]` (BW 272) `non-indexed=109, max_count=120000`; `combo[4]`
+    (BW 304) `geom=54 non-indexed=54, max_count=75000`. `[verified-live 2026-09-04, n=1 launch]` These are
+    MVP-bearing draws whose cb0 is a per-shader `DYNAMIC` buffer the pool patch never intercepts — not
+    no-MVP draws (skinning is pre-MVP, §6). **Visible confirmation:** with `TEST_YAW=90`, Chapter 1's
+    rainy opening rendered as a radically transformed scene (patched ~75% rotated) with unrotated
+    fragments and an upright, detached character head — i.e. the pool_miss geometry rendering unrotated.
+    **⇒ a stereo build must extend coverage to the per-shader DYNAMIC cb0 path, not only the shared
+    DEFAULT pool.** Notes: `modding-notes/2026-09-04b-config-arm-confirmed-yaw-visible-poolmiss-carries-geometry.md`.
 
 ## 8. Pass inventory (by render target)
 - Main scene: 1280×720 colour (formats 28/10/24/61/2 = G-buffer/HDR/aux) with

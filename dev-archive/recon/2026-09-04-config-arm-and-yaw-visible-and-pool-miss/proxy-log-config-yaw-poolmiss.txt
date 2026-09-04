@@ -1,0 +1,48 @@
+=== config-arm lines (pid 26016) ===
+[1457731218][tid=28336] mvp_patch: TEWVR_TEST_YAW=90.000 -> test rotation K ACTIVE (every patchable draw rotated)
+[861833062][tid=9060] config: read D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini: 1 setting(s) taken
+[861833062][tid=9060] TEWVR winmm proxy attached (pid=26016)
+[861834109][tid=10436] config: TEWVR_TEST_YAW=90 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[861834109][tid=10436] mvp_patch: TEWVR_TEST_YAW=90.000 -> test rotation K ACTIVE (every patchable draw rotated)
+
+=== per-5s summary (patched vs no-mvp) ===
+[862607718][tid=4620] mvp_patch: DIAG last ~5000ms: patched=300966 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=18414 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=44146 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[862612718][tid=26048] mvp_patch: DIAG last ~5000ms: patched=304350 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=18600 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=44550 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[862617718][tid=23816] mvp_patch: DIAG last ~5000ms: patched=304350 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=18600 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=44550 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[862622718][tid=26048] mvp_patch: DIAG last ~5000ms: patched=304350 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=18600 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=44550 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[862627718][tid=26048] mvp_patch: DIAG last ~5000ms: patched=304350 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=18600 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=44550 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[862632718][tid=7096] mvp_patch: DIAG last ~5000ms: patched=304350 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=18600 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=44550 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+
+=== pool-miss table (one full census) ===
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[0]: ByteWidth=64 Usage=2 BindFlags=0x4 CPUAccess=0x10000 | sampled misses: created-through-our-hook=1676 NEVER-seen-by-our-hook=0
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[0] draws: sampled=1676 geom(count>=300)=12 tiny(count<=6)=248 non-indexed=0 max_count=7326 | vertex shaders: B1D58C4E5AFFD705 x3 DD0AE50A24B07A1A x232 546A295A7B366438 x1367 466E553A48244F4E x74
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[1]: ByteWidth=1920 Usage=0 BindFlags=0x4 CPUAccess=0x0 | sampled misses: created-through-our-hook=2 NEVER-seen-by-our-hook=0
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[1] draws: sampled=2 geom(count>=300)=1 tiny(count<=6)=0 non-indexed=0 max_count=881 | vertex shaders: 2005A744274207BE x2
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[2]: ByteWidth=96 Usage=2 BindFlags=0x4 CPUAccess=0x10000 | sampled misses: created-through-our-hook=12701 NEVER-seen-by-our-hook=0
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[2] draws: sampled=12701 geom(count>=300)=0 tiny(count<=6)=0 non-indexed=0 max_count=36 | vertex shaders: 10996AB49ECC51E5 x12654 3FA70DFC2348CA3C x47
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[3]: ByteWidth=272 Usage=2 BindFlags=0x4 CPUAccess=0x10000 | sampled misses: created-through-our-hook=777 NEVER-seen-by-our-hook=0
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[3] draws: sampled=777 geom(count>=300)=134 tiny(count<=6)=499 non-indexed=109 max_count=120000 | vertex shaders: 7C1CDB2B2840E0A2 x668 3164991EF3904AC3 x10 04A0420D21E04E3E x99
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[4]: ByteWidth=304 Usage=2 BindFlags=0x4 CPUAccess=0x10000 | sampled misses: created-through-our-hook=54 NEVER-seen-by-our-hook=0
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[4] draws: sampled=54 geom(count>=300)=54 tiny(count<=6)=0 non-indexed=54 max_count=75000 | vertex shaders: D299B3E1E6F9257A x54
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[5]: ByteWidth=160 Usage=2 BindFlags=0x4 CPUAccess=0x10000 | sampled misses: created-through-our-hook=3553 NEVER-seen-by-our-hook=0
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[5] draws: sampled=3553 geom(count>=300)=1016 tiny(count<=6)=0 non-indexed=0 max_count=39102 | vertex shaders: E0AE33260EFDF8F9 x1060 EFC668D0B56DFF73 x80 450BCAC30AECE8E3 x957 39475848F02184CB x1456
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[6]: ByteWidth=128 Usage=2 BindFlags=0x4 CPUAccess=0x10000 | sampled misses: created-through-our-hook=11739 NEVER-seen-by-our-hook=0
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[6] draws: sampled=11739 geom(count>=300)=755 tiny(count<=6)=5012 non-indexed=0 max_count=1194 | vertex shaders: 8BAE0ED3495A080E x53 808F48747C902C8B x904 A899DCB1998491FD x557 35D26B3FD1DC900C x23 CEE6DBC3D500496C x2414 E17A3AA67F56CCAA x64 461B6C543D78E0C4 x166 F1F0DE2B28CF8180 x1724 (+more, per-combo shader set full)
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[7]: ByteWidth=224 Usage=2 BindFlags=0x4 CPUAccess=0x10000 | sampled misses: created-through-our-hook=2402 NEVER-seen-by-our-hook=0
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[7] draws: sampled=2402 geom(count>=300)=1166 tiny(count<=6)=244 non-indexed=0 max_count=39102 | vertex shaders: CB959B3A3DB48EA9 x1116 CB5FF43773907023 x559 D853E51D66B4CC6D x199 B8AF552ADB615036 x524 E44C3CCFB47BAA9D x4
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[8]: ByteWidth=112 Usage=2 BindFlags=0x4 CPUAccess=0x10000 | sampled misses: created-through-our-hook=658 NEVER-seen-by-our-hook=0
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[8] draws: sampled=658 geom(count>=300)=225 tiny(count<=6)=0 non-indexed=0 max_count=792 | vertex shaders: C9D55C7AB91037FF x658
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[9]: ByteWidth=144 Usage=2 BindFlags=0x4 CPUAccess=0x10000 | sampled misses: created-through-our-hook=6109 NEVER-seen-by-our-hook=0
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[9] draws: sampled=6109 geom(count>=300)=32 tiny(count<=6)=2771 non-indexed=0 max_count=738 | vertex shaders: 90BC8DE9177D4442 x1671 E8FA4CA8821786EE x4438
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[10]: ByteWidth=240 Usage=2 BindFlags=0x4 CPUAccess=0x10000 | sampled misses: created-through-our-hook=4681 NEVER-seen-by-our-hook=0
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[10] draws: sampled=4681 geom(count>=300)=0 tiny(count<=6)=0 non-indexed=0 max_count=36 | vertex shaders: 9CBFB5ADD6A6B504 x514 5E22D89520D3F3FF x4167
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[11]: ByteWidth=208 Usage=2 BindFlags=0x4 CPUAccess=0x10000 | sampled misses: created-through-our-hook=553 NEVER-seen-by-our-hook=0
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[11] draws: sampled=553 geom(count>=300)=0 tiny(count<=6)=0 non-indexed=0 max_count=36 | vertex shaders: 931EFF807E11D6E1 x553
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[12]: ByteWidth=192 Usage=2 BindFlags=0x4 CPUAccess=0x10000 | sampled misses: created-through-our-hook=2173 NEVER-seen-by-our-hook=0
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[12] draws: sampled=2173 geom(count>=300)=0 tiny(count<=6)=0 non-indexed=0 max_count=180 | vertex shaders: 4CF6F0C274146F74 x2173
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[13]: ByteWidth=176 Usage=2 BindFlags=0x4 CPUAccess=0x10000 | sampled misses: created-through-our-hook=63 NEVER-seen-by-our-hook=0
+[862197718][tid=26848] mvp_patch: DIAG miss-combo[13] draws: sampled=63 geom(count>=300)=0 tiny(count<=6)=0 non-indexed=0 max_count=126 | vertex shaders: 6EF00BDC95BA8EBB x63
+[862197718][tid=26848] mvp_patch: DIAG shadow concurrency (cumulative): cross-thread writes=18818357, CONCURRENT writes=0, draws skipped for a torn shadow=0  (cross-thread only, no concurrency observed - the expected state)
+[862199484][tid=27016] Present hook alive: frame 20161
+[862201484][tid=27016] Present hook alive: frame 20281
+[862202718][tid=26848] mvp_patch: DIAG last ~5000ms: patched=591802 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=13662 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=333228 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
