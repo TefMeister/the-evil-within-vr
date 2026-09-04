@@ -170,6 +170,13 @@ and the assumption throughout was that a runtime dump is the only source.
   limitation — the mechanism only patches contiguous layouts) plus a
   `pool_miss` fraction not yet root-caused. A stereo build would render this
   fraction at the wrong per-eye orientation until addressed.
+  - **Update 2026-09-03/04:** the scattered-row half is closed (§12) — 34 of 34 verified live.
+    `pool_miss` is **a different render path, not a ceiling** (2026-09-03f): the pool only
+    registers the large shared `DEFAULT` world buffer, and a miss on a small per-shader
+    `DYNAMIC` cb0 is expected. Whether the missed draws carry world geometry was unmeasurable
+    because the bucketed miss table printed only while `patched == 0`; **since 2026-09-04 it
+    prints every ~30 s and at shutdown, and each bucket also records draw sizes and vertex-shader
+    hashes** — see §12. `[compile-verified 2026-09-04]`, not run.
 
 ## 8. Pass inventory (by render target)
 - Main scene: 1280×720 colour (formats 28/10/24/61/2 = G-buffer/HDR/aux) with
@@ -275,6 +282,15 @@ through.
   ExecuteCommandList — the experiment that mapped the frame), `TEWVR_CBPEEK`
   (draw-time constant-buffer content read), a shader-hash→mvp-offset reflection
   table, plus `shaderdump` + an offline DXBC disassembler.
+- **Every `TEWVR_*` knob is also read from a file since 2026-09-04** (branch
+  `stereo-6dof-core` `3475717`, `src/config.c`): `tewvr.ini` beside `EvilWithin.exe`, then
+  `%LOCALAPPDATA%\TEWVR\tewvr.ini`; the process environment still wins. `KEY = value` lines,
+  prefix optional, read once at attach. Added because a **Steam launch inherits Steam's
+  environment**, so the yaw test silently ran as identity three launches in a row
+  (2026-09-03e/f/g) — a launcher script is not a mechanism, a file the proxy reads itself is.
+  `tewvr.log` names the source of every knob it found. Parser
+  `[verified-numerically 2026-09-04, n=14 checks]` via `tools/config_test.c`; the in-process read
+  is `[compile-verified 2026-09-04]` only. Key list: `proxy-winmm/tewvr.ini.example`.
 
 ## 11. Dead ends & false leads (save future time)
 - A 384-byte "view matrix" (orthonormal + varying) was actually a **per-object
@@ -355,6 +371,22 @@ through.
     shader count need not be the busiest by draw count. Do not restate the 44% as a draw figure.
     Says nothing about the `pool_miss` residual, which is a buffer-identity problem, not a
     shader-layout one.
+  - **The `pool_miss` residual, corrected and instrumented (2026-09-03f, 2026-09-04).** It is
+    **not** a ceiling: the proxy's own first-miss diagnostic says a miss on the small per-shader
+    `DYNAMIC` cb0s is expected — the pool registers only the large shared `DEFAULT` world buffer.
+    Declared `cb0` across all 167 known shaders runs 0–352 B, none in the 1856–1984 pool window
+    `[measured 2026-09-03, n=167]` (D3D11 allows a bound buffer larger than the declaration, so
+    this is consistent). Its share swings 13% → 19% with scene and camera `[verified-live
+    2026-09-03, n=3]` — a scene property, not a fixed limit. **The open question — do the missed
+    draws carry world geometry? — was unanswerable only because of an `if`:** `mvp_patch.c` has
+    bucketed sampled misses by `(ByteWidth, Usage, BindFlags, CPUAccess)` since fix round 4, but
+    printed the table only under `pool_miss > 0 && patched == 0`, the same gate that hid the
+    shadow-concurrency counters until 2026-09-01. **Since 2026-09-04** (branch `3475717`) the
+    table prints every 6th window and at shutdown, and each bucket adds sampled draw sizes
+    (`geom` ≥ 300 indices, `tiny` ≤ 6, `max_count`, indexed or not) plus up to 8 vertex-shader
+    hashes — nameable offline through the archive tables. Reading guide:
+    `modding-notes/2026-09-04-the-proxy-reads-a-config-file-and-the-miss-table-prints-while-patching-works.md`
+    §2. `[compile-verified 2026-09-04]`; the columns are empty until a launch.
   - **~~Blocked on one launch~~ — RETIRED 2026-09-03, see the next bullet.** The reflection table records only a base offset and a contiguity
     flag, so rows 1-3 are not recoverable from it; that needs vertex-shader bytecode, and **none
     was ever saved**. One launch with the shader-dump path, then
