@@ -1,0 +1,26 @@
+=== dynamic cb0 path DIAG (in-scene, Chapter 1) ===
+[865024609][tid=20384] mvp_patch: DIAG dynamic cb0 path: pool=61/64 buffers, shadow writes=0, draws patched via it=0, registered-but-unfed skips=279364, pending-map table overflows=3160786
+[865029609][tid=10392] mvp_patch: DIAG dynamic cb0 path: pool=61/64 buffers, shadow writes=0, draws patched via it=0, registered-but-unfed skips=171523, pending-map table overflows=3294700
+[865034609][tid=10392] mvp_patch: DIAG dynamic cb0 path: pool=61/64 buffers, shadow writes=0, draws patched via it=0, registered-but-unfed skips=115227, pending-map table overflows=3386889
+[865039609][tid=10392] mvp_patch: DIAG dynamic cb0 path: pool=62/64 buffers, shadow writes=0, draws patched via it=0, registered-but-unfed skips=122580, pending-map table overflows=3475928
+[865044609][tid=19432] mvp_patch: DIAG dynamic cb0 path: pool=62/64 buffers, shadow writes=0, draws patched via it=0, registered-but-unfed skips=183518, pending-map table overflows=3621634
+[865049609][tid=20384] mvp_patch: DIAG dynamic cb0 path: pool=62/64 buffers, shadow writes=0, draws patched via it=0, registered-but-unfed skips=384527, pending-map table overflows=3905905
+[865054609][tid=19432] mvp_patch: DIAG dynamic cb0 path: pool=64/64 buffers, shadow writes=0, draws patched via it=0, registered-but-unfed skips=275323, pending-map table overflows=4102418
+[865059609][tid=2024] mvp_patch: DIAG dynamic cb0 path: pool=64/64 buffers, shadow writes=0, draws patched via it=0, registered-but-unfed skips=240154, pending-map table overflows=4332785
+
+=== thread-ring pool exhausted (the named failure) ===
+[862520734][tid=23816] mvp_patch: thread-ring pool exhausted (8 distinct threads seen); further threads share the last bucket - patch stays correct via WRITE_DISCARD renaming, may rarely contend under unusually many threads
+[864916109][tid=20672] mvp_patch: thread-ring pool exhausted (8 distinct threads seen); further threads share the last bucket - patch stays correct via WRITE_DISCARD renaming, may rarely contend under unusually many threads
+[864916125][tid=20384] mvp_patch: thread-ring pool exhausted (8 distinct threads seen); further threads share the last bucket - patch stays correct via WRITE_DISCARD renaming, may rarely contend under unusually many threads
+[864916125][tid=19432] mvp_patch: thread-ring pool exhausted (8 distinct threads seen); further threads share the last bucket - patch stays correct via WRITE_DISCARD renaming, may rarely contend under unusually many threads
+
+=== CreateBuffer coverage (DEFAULT pool still 6, working) ===
+[864974609][tid=20672] mvp_patch: DIAG CreateBuffer coverage: total_calls_seen=7653 of which constant_buffers=1734 (recorded identities=1734, cap 2048); world cb0 pool holds 6; UpdateSubresource targets hooked=2, shadow writes=5671887 (partial-box=0), draws skipped for an empty shadow=18, cross-thread shadow writes=5149523, CONCURRENT shadow writes=0, draws skipped for a torn shadow=0, late-hooks after a shadow was already valid=1
+[865004609][tid=2024] mvp_patch: DIAG CreateBuffer coverage: total_calls_seen=7653 of which constant_buffers=1734 (recorded identities=1734, cap 2048); world cb0 pool holds 6; UpdateSubresource targets hooked=2, shadow writes=7570363 (partial-box=0), draws skipped for an empty shadow=18, cross-thread shadow writes=7047999, CONCURRENT shadow writes=0, draws skipped for a torn shadow=0, late-hooks after a shadow was already valid=1
+[865034609][tid=10392] mvp_patch: DIAG CreateBuffer coverage: total_calls_seen=7653 of which constant_buffers=1734 (recorded identities=1734, cap 2048); world cb0 pool holds 6; UpdateSubresource targets hooked=2, shadow writes=9368905 (partial-box=0), draws skipped for an empty shadow=18, cross-thread shadow writes=8846541, CONCURRENT shadow writes=0, draws skipped for a torn shadow=0, late-hooks after a shadow was already valid=1
+
+=== per-5s patched (DEFAULT pool intact) ===
+[865044609][tid=19432] mvp_patch: DIAG last ~5000ms: patched=334769 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=15327 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=183518 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[865049609][tid=20384] mvp_patch: DIAG last ~5000ms: patched=492594 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=15457 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=384527 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[865054609][tid=19432] mvp_patch: DIAG last ~5000ms: patched=344019 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=15303 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=277255 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[865059609][tid=2024] mvp_patch: DIAG last ~5000ms: patched=591866 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=13799 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=261006 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
