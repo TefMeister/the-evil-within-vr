@@ -192,6 +192,51 @@ and the assumption throughout was that a runtime dump is the only source.
     **⇒ a stereo build must extend coverage to the per-shader DYNAMIC cb0 path, not only the shared
     DEFAULT pool.** Notes: `modding-notes/2026-09-04b-config-arm-confirmed-yaw-visible-poolmiss-carries-geometry.md`.
 
+### ⭐ 7b. The coverage gap has a second interception path now: per-shader DYNAMIC cb0 (2026-09-04c, `/pd`, no launch)
+
+**The gap was never a shader problem.** `[measured 2026-09-04, n=167 shaders]` Of the accumulated
+runtime shader table, 145 are MVP-bearing, and **61 of those — 42.1% — declare `cb0` at one of the
+four sizes the 2026-09-04b bucketed dump named as carrying real geometry** (`cb0=224` 33 shaders,
+`160` 18, `272` 8, `304` 2; 8 of the 61 use the scattered z/w layout, handled since 2026-09-03).
+**Every one already has a complete reflected four-row set recorded**, so they were always patchable
+— only the buffer was out of reach.
+⚠️ SHADER counts, not DRAW counts: do not mix these with the ~74–77% draw figure, which is a
+different population. Analysis and the rescued table:
+`dev-archive/recon/2026-09-04c-dynamic-cb0-coverage/`.
+
+**Why they were unreachable.** The pool tracks only the large shared **DEFAULT** world buffer,
+because `UpdateSubresource` is the only CPU write path a DEFAULT buffer has and that is what feeds
+its shadow — the registration filter rejects DYNAMIC buffers explicitly, and correctly, on those
+grounds. A per-shader DYNAMIC `cb0` is written through `Map(WRITE_DISCARD)`/`Unmap`, which nothing
+was watching.
+
+**The fix is one more shadow SOURCE, not a new patch mechanism.** `Map`/`Unmap` (vtable slots 14 and
+15, read from the SDK header rather than assumed) are hooked; at `Unmap` the mapped contents are
+copied into a shadow while the pointer is still valid; and the existing draw-time path — bounds
+check, seqlocked read, `K` multiply, scratch write, rebind — then runs unchanged. The new slots are
+a **partition of the same arrays** (`[0,32)` DEFAULT, `[32,96)` DYNAMIC), so every seqlock and
+validity guarantee already reviewed applies to them without duplication and the hot DEFAULT lookup
+does not slow down. Registration is offered **from the draw path only**, never from a descriptor,
+per this module's existing rule; a newly seen buffer is unpatched for its first draw and patched
+from the next write on. `[compile-verified 2026-09-04]`, deployed (`winmm.dll` 352,768 B; previous
+kept as `winmm.dll.bak-2026-09-04c-pre-dynpool`). **Not run.**
+
+- **Two compile-time assertions guard the partition**, both proved to fire by deliberately breaking
+  the values `[verified-numerically 2026-09-04, n=2 negative controls]`: a dynamic buffer wider than
+  the shadow window, and the pool sizes drifting out of step with the array size.
+- **A 64-bit pointer bug was caught before it shipped:** the pending-map table claimed its slot with
+  the 32-bit `InterlockedCompareExchange` on a resource pointer, which truncates in this process and
+  would have matched the wrong buffer at `Unmap` — patching one mesh from another's constants.
+- ⚠️ **Pool size (64) is a guess** — the live evidence names four size/usage combos but not how many
+  distinct buffers back them. It logs when it fills.
+- ⚠️ **Known risk, not designed away:** two deferred contexts may legally `Map` the same buffer at
+  once (`WRITE_DISCARD` renames per context) and a shadow keyed by buffer pointer cannot represent
+  both. The seqlock degrades to fail-safe (draw falls through unpatched) and
+  `g_diag_shadow_concurrent` counts it. **If that counter moves, this path needs per-context
+  shadows** — a redesign, not a tweak.
+
+Write-up, including the log lines to read and what each means: `modding-notes/2026-09-04c-the-dynamic-cb0-path-is-built-and-it-addresses-42-percent-of-the-shader-table.md`.
+
 ## 8. Pass inventory (by render target)
 - Main scene: 1280×720 colour (formats 28/10/24/61/2 = G-buffer/HDR/aux) with
   1280×720 depth (fmt 44 = D24S8).
@@ -307,6 +352,12 @@ through.
   is `[compile-verified 2026-09-04]` only. Key list: `proxy-winmm/tewvr.ini.example`.
 
 ## 11. Dead ends & false leads (save future time)
+- **"`pool_miss` is harmless small dynamic cb0s" was half right and wholly misleading.** The misses
+  really are per-shader DYNAMIC buffers rather than a failing DEFAULT path (2026-09-03f), but that
+  did not make them unimportant: bucketing them showed they carry world meshes up to 120,000
+  vertices `[verified-live 2026-09-04]`, and 42% of the MVP-bearing shader table declares `cb0` at
+  those sizes. **A diagnostic that explains WHY a counter is high is not the same as showing the
+  counter does not matter.**
 - A 384-byte "view matrix" (orthonormal + varying) was actually a **per-object
   cloth model matrix**, not the camera. Content heuristics match per-object
   matrices too — trust shader reflection, not heuristics. (2026-08-20: a
