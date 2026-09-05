@@ -150,6 +150,23 @@ That table is the reason to read the log before touching this code again.
 ⚠️ **The build is from the `stereo-6dof-core` branch**, because that is where the live source is.
 A build from `main` today is still a Task-4-era diagnostic proxy with no camera override in it.
 
+### ⚠️ This build is not byte-reproducible — do not read a hash mismatch as a problem
+
+Caught in this session's own self-review. "Hash-verified against the build output" is true at the
+moment of deploy, but **rebuilding the identical source produces a different hash**, so a later
+session comparing the deployed DLL against a fresh build will find a mismatch and may reasonably
+suspect the deploy went wrong. It did not.
+
+Measured: the deployed `winmm.dll` and a fresh rebuild of the same commit are both 353,792 bytes
+and differ in **exactly 4 bytes** — at `0x80`–`0x81`, inside the PE `TimeDateStamp` field
+(`e_lfanew` = `0x78`, so that field spans `0x80`–`0x83`; deployed stamp `0x6A9BCDC7`, rebuilt
+`0x6A9BCF46`, a few minutes apart), and at `0x20804`–`0x20805`, the same stamp echoed in the debug
+directory. Nothing else differs. `[verified-numerically 2026-09-05]`
+
+**So compare sizes, or diff and expect exactly those four offsets — not hashes** — when checking
+whether a deployed TEW proxy matches a build. (Two consecutive rebuilds of untouched source also
+differ from each other, which is the direct demonstration.)
+
 ## 8. The merge shape, re-measured
 
 The standing `[USER]` row says its file counts are a floor. Re-measured today in a throwaway clone,
