@@ -238,6 +238,50 @@ kept as `winmm.dll.bak-2026-09-04c-pre-dynpool`). **Not run.**
 
 Write-up, including the log lines to read and what each means: `modding-notes/2026-09-04c-the-dynamic-cb0-path-is-built-and-it-addresses-42-percent-of-the-shader-table.md`.
 
+### ⭐ 7a. The in-flight Map/Unmap pairing is keyed on `(context, resource)`, not on the buffer (2026-09-05, `/pd`, static only)
+
+The 2026-09-04c DYNAMIC path shipped with the pairing held in a **global 32-entry table claimed by
+CAS on the resource pointer and searched at `Unmap` by a linear scan for that pointer**. Live on
+2026-09-04d it produced `shadow writes=0` with `pending-map table overflows=2787733`.
+
+⚠️ **The 2026-09-04d write-up's stated cause — "a per-thread ring pool sized for 8 threads" — is
+wrong** `[disproved 2026-09-05]`. That reading came from the log line
+`thread-ring pool exhausted (8 distinct threads seen)`, which belongs to the **draw-time
+scratch-buffer rings**, an unrelated subsystem whose own message says the patch stays correct
+through that condition via `WRITE_DISCARD` renaming. Sizing a thread pool would have fixed nothing.
+
+**The real cause is the known risk this dossier already recorded for the shadow, applied to the
+pairing:** two deferred contexts may legally `Map` the same `ID3D11Buffer` simultaneously, because
+`WRITE_DISCARD` renames per context. With ~6 deferred workers plus the immediate context and 54
+buffers registered, the same buffer holds several in-flight maps at once — so a scan keyed on the
+buffer matches the wrong one, and 32 slots saturate and never drain.
+`[verified-numerically 2026-09-05]`
+
+**An in-flight map's identity is the pair `(context, resource)`** — unique by construction, since
+D3D11 allows one context only one outstanding map of a subresource. The table is now
+open-addressed, linear-probed on a hash of both halves, 1024 slots, 24-probe budget, lock-free.
+Claim order (CAS `res`, then publish `ctx` last) and free order (scrub `ctx`/`data` first, release
+`res` last), with matching on both fields, is what keeps a prober from ever matching a half-written
+entry.
+
+Checked without the game by `proxy-winmm/tools/map_pairing_test.c`, which includes the **shipped**
+hash from `src/mvp_maptab.h` rather than a transcription: 17 checks passing, and critically it
+**replays the old design and reproduces the failure** — 32 placed, 346 overflowed of 378 maps, one
+buffer holding 7 entries at once — while the new table places all 378 at a worst probe depth of 6,
+hashes one buffer from 7 contexts into 7 distinct buckets, pairs every `Unmap` to its own `pData`,
+and drains to empty over 20,000 rounds. `[verified-numerically 2026-09-05]`
+
+**Still NOT fixed, and not claimed:** the shadow remains one window per buffer, so simultaneous
+writes to one buffer from two contexts still cannot both be represented. §7's warning above stands
+unchanged, and `g_diag_shadow_concurrent` is still its readout — the pairing fix is what finally
+makes that counter mean something, since until now no write reached it at all.
+
+A new DIAG line (`maps seen` / `unmaps seen` / `unmaps with no recorded map`) distinguishes "fixed"
+from "our `Unmap` hook never sees these buffers" — the latter being a real possibility, because
+deferred contexts use a different vtable flavour and `Map`/`Unmap` are hooked **once** on the
+immediate context and **never late-hooked**, unlike `UpdateSubresource`. Write-up:
+`modding-notes/2026-09-05-the-pairing-was-never-a-thread-ring-it-was-a-32-entry-table-keyed-on-the-wrong-thing.md`.
+
 ## 8. Pass inventory (by render target)
 - Main scene: 1280×720 colour (formats 28/10/24/61/2 = G-buffer/HDR/aux) with
   1280×720 depth (fmt 44 = D24S8).
@@ -353,6 +397,13 @@ through.
   is `[compile-verified 2026-09-04]` only. Key list: `proxy-winmm/tewvr.ini.example`.
 
 ## 11. Dead ends & false leads (save future time)
+- **⚠️ Do not read `thread-ring pool exhausted` as an explanation of a pairing failure
+  (2026-09-05).** That line is emitted by the **draw-time scratch-buffer rings**, and its own text
+  says the patch stays correct through it via `WRITE_DISCARD` renaming. On 2026-09-04d it sat in
+  the same DIAG block as `shadow writes=0` / `overflows=2787733` and was read as their cause; it
+  was not, and the fix it implied (size the thread pool) would have changed nothing. The general
+  trap: **a log line that co-occurs with a failure is not thereby an explanation of it** — check
+  which subsystem emits it before building on it. See §7a. `[disproved 2026-09-05]`
 - **"`pool_miss` is harmless small dynamic cb0s" was half right and wholly misleading.** The misses
   really are per-shader DYNAMIC buffers rather than a failing DEFAULT path (2026-09-03f), but that
   did not make them unimportant: bucketing them showed they carry world meshes up to 120,000
