@@ -1,6 +1,12 @@
+Supersedes: modding-notes/2026-09-04d-dynamic-cb0-path-defeated-by-thread-ring-overflow.md §2 (the stated cause), and ENGINE-DOSSIER §11's absence of a warning about that log line
+
 # The DYNAMIC cb0 pairing was never a thread ring — it was a 32-entry table keyed on the wrong thing
 
 `/pd`, home PC, 2026-09-05. **The game was not launched; nothing here was run.**
+
+⚠️ This file **corrects** the cause recorded on 2026-09-04d. That session's *measurements* stand
+(`shadow writes=0`, `pending-map table overflows=2787733`, `pool=54/64`); only its explanation of
+them is withdrawn. See §1.
 
 Closes the `[PD]` row from 2026-09-04d. Also **corrects that row's own diagnosis**, which is the
 more important half.
