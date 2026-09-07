@@ -441,6 +441,33 @@ through.
   `[verified-numerically 2026-09-04, n=14 checks]` via `tools/config_test.c`; the in-process read
   is `[compile-verified 2026-09-04]` only. Key list: `proxy-winmm/tewvr.ini.example`.
 
+### ⛔️ `SendInput` DOES NOT REACH THIS GAME — and a 2026-09-03 "verified" claim is withdrawn (2026-09-07, `/lm`)
+
+Two launches, driven. **Run 1** (a DualSense connected) looked like keyboard automation working:
+splash, title and menu all advanced. **Run 2** (controller unplugged): **nothing advances at all**
+— `Enter` will not even dismiss the photosensitivity splash, with the game's foreground state
+**verified before every send**. So run 1's advances were the *controller*, and the highlight that
+crept from `CONTINUE` to `NEW GAME` while only Enters were being sent was **stick drift**.
+`[verified-live 2026-09-07, n=2 launches]` — this **withdraws** the profile's
+`SendInput scancodes [verified-live 2026-09-03]` binding.
+
+**Why:** `EvilWithin.exe` imports **`DINPUT8.dll`** and **`XINPUT1_3.dll`**. A DirectInput8
+keyboard acquired by the game is exactly the path that does not see injected Windows input —
+established the same day on `prince-of-persia-2008-vr`, where a key held 22 s across four logged
+samples never reached the game's own state buffer. `[verified-numerically 2026-09-07]`
+
+⚠️ **Strong lead, not a proven cause here.** TEW also imports `GetAsyncKeyState`,
+`GetKeyboardState`, `GetKeyState`, `GetMessageA` and `SetWindowsHookEx`, so it has more input
+surface than PoP did, and nothing yet shows *which* path the menu actually reads.
+
+**The fix is already written and needs porting, not inventing:** the `GetDeviceState` injector
+built for PoP writes into the state buffer the game asks for, inside its own read path, where
+focus and injection blocking are irrelevant. TEW is **64-bit**, so it needs a 64-bit build, and
+this game **already has a proxy** (`winmm.dll`, MinHook vendored) — so the hook belongs inside that
+proxy rather than as a second DLL. Source: `staging/prince-of-persia-2008-vr/proxy-dinput8/`.
+
+Evidence: `dev-archive/recon/2026-09-07-sendinput-does-not-reach-tew/`.
+
 ## 11. Dead ends & false leads (save future time)
 - **⚠️ Do not read `thread-ring pool exhausted` as an explanation of a pairing failure
   (2026-09-05).** That line is emitted by the **draw-time scratch-buffer rings**, and its own text
