@@ -282,6 +282,51 @@ deferred contexts use a different vtable flavour and `Map`/`Unmap` are hooked **
 immediate context and **never late-hooked**, unlike `UpdateSubresource`. Write-up:
 `modding-notes/2026-09-05-the-pairing-was-never-a-thread-ring-it-was-a-32-entry-table-keyed-on-the-wrong-thing.md`.
 
+#### ⚠️ `unmaps==0` HAS A SECOND CAUSE — do not read it as "our hook is blind" (folded from `/gr`, 2026-09-07)
+
+On a **deferred context**, `Map` does not touch the real resource: the runtime hands back a **fresh
+scratch allocation owned by that context's command list**, committed when the list is replayed. In
+DXVK's implementation of that contract, **`Unmap` on a deferred context is a no-op — the update is
+committed in `Map`** (`WRITE_DISCARD` allocates a new slice; `WRITE_NO_OVERWRITE` requires a prior
+discard on that list or errors). `[reported 2026-09-07]`
+
+So a `unmaps==0` reading does **not** by itself mean the `Unmap` hook never sees these buffers.
+**Distinguishing the two is cheap: count whether `Unmap` is reached on *any* context at all**, not
+just on the pool's buffers. Source:
+`external-research/topics/2026-09-07-deferred-map-hands-back-scratch-memory-so-a-per-eye-edit-is-baked-into-the-command-list.md`.
+
+**It also supplies the missing *reason* for the `(ctx,res)` key** this section already uses: the
+same constant buffer may legally be mapped **simultaneously on two different deferred contexts**,
+so a resource-only key is unsafe. And it names why the original per-thread ring was on the wrong
+axis at all — *"only one thread can call a ID3D11DeviceContext at a time"*: **threads are unbounded
+and transient; contexts are few and stable.**
+
+#### ✅ The 3Dmigoto #104 deadlock shape is NOT present in this codebase (audited 2026-09-07, `/lm`, static)
+
+`/gr` flagged a named hazard this hook shape is prone to — 3Dmigoto issue #104, *"Lock ordering bug
+(Deadlock) between 3DMigoto and DirectX"*: take your own lock, call into D3D, D3D takes its lock and
+later calls `Release()`, which re-enters your release tracker, which tries to retake your lock. It
+would present as a hang, so it was worth one read before a launch rather than after.
+
+**Audited, and every D3D call in every hook is made OUTSIDE our locks** `[inferred-static 2026-09-07]`:
+
+| site | finding |
+| --- | --- |
+| `mvp_patch.c` `Hook_Map` / `Hook_Unmap` | take **no lock at all** — purely interlocked. `Map` calls `orig()` first; `Unmap` calls `orig()` last |
+| `mvp_patch.c` `mvp_direct_pool_try_capture` | `ID3D11Buffer_AddRef` is called **after** `LeaveCriticalSection`, deliberately |
+| `mvp_patch.c` scratch path | `ID3D11DeviceContext_Map` is called **after** `LeaveCriticalSection(&g_scratch_init_cs)` |
+| `cbdump.c` `Hook_Map` / `Hook_Unmap` | the lock covers a pure in-memory table update only; `resource_is_camera_sized_buffer` and the dump both run outside it |
+
+⚠️ Scope of that claim: it is a **read of the code**, not a run under contention. It says the
+*lock-ordering shape* is absent, not that no deadlock of any other kind can occur.
+
+#### 🅿️ Parked, deliberately: a structural limit on Map-time stereo
+
+A value written at `Map` time on a deferred context is **baked into the recorded command list**, so
+one recorded upload cannot express a different value per eye `[hypothesis]`. This does **not**
+affect the pending mono re-test (`TEST_YAW=90`), and the draw-time pool path is unaffected because
+it substitutes at draw time. Revisit **only if the mono re-test passes and stereo is next**.
+
 ## 8. Pass inventory (by render target)
 - Main scene: 1280×720 colour (formats 28/10/24/61/2 = G-buffer/HDR/aux) with
   1280×720 depth (fmt 44 = D24S8).
