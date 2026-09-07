@@ -18,6 +18,13 @@ this project.
 
 | Work | Creator(s) | Note |
 |---|---|---|
+| Direct3D 11 documentation (first-party) — `ID3D11DeviceContext::Map`, *Introduction to Multithreading in Direct3D 11*, *Immediate and Deferred Rendering*, *How to: Use dynamic resources*: context single-threadedness, DISCARD renaming vs NO_OVERWRITE, and deferred-context map semantics (2026-09-07) | Microsoft | https://learn.microsoft.com/en-us/windows/win32/direct3d11/overviews-direct3d-11-render-multi-thread-intro |
+| DXVK — its deferred-context implementation is where "`Unmap` is a no-op; the update is committed in `Map`" is legible, plus the discard/no-overwrite slice handling (2026-09-07) | doitsujin (Philip Rebohle), K0bin | https://github.com/doitsujin/dxvk |
+| 3Dmigoto — the map-table design, the silently-no-op unpaired `Unmap`, the documented deferred-context caveats, the canonical shader-side stereo mechanism, and **issue #104** (the lock-ordering deadlock this hook shape is prone to) (2026-09-07) | bo3b, DarkStarSword | https://github.com/bo3b/3Dmigoto/issues/104 |
+| RenderDoc — the `{resource, subresource}` open-map key and its per-context wrappers (2026-09-07) | baldurk (Baldur Karlsson) | https://github.com/baldurk/renderdoc |
+| ReShade — add-on event signatures separating buffer/texture mapping from command-list binding (2026-09-07) | crosire | https://github.com/crosire/reshade |
+| Special K — the cached per-context type/handle pattern, and a public report of an engine spawning one deferred context per logical core (2026-09-07) | Kaldaien | https://github.com/SpecialKO/SpecialK |
+| "id Tech 5 Challenges: From Texture Virtualization to Massive Parallelization" (SIGGRAPH 2009) — id Tech 5's job-system architecture (2026-09-07) | J.M.P. van Waveren / id Software | https://mrl.cs.vsb.cz/people/gaura/agu/05-JP_id_Tech_5_Challenges.pdf |
 | The Evil Within (2014), original game and its engine | Tango Gameworks (developer); Bethesda Softworks / ZeniMax (publisher) | Directed by Shinji Mikami. Built on a heavily modified id Tech 5. |
 | id Tech 5 (the base engine) | id Software | The foundation Tango modified for the game. |
 
