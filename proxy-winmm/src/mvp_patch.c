@@ -792,7 +792,24 @@ static void mvp_diag_maybe_report(void) {
 
 /* ---- install-time hook bookkeeping ---- */
 
-#define MVP_MAX_HOOKED_FUNCS 4
+/* 5 hook_one() call sites in this file - DrawIndexed, Draw, CreateBuffer, Map,
+ * Unmap - against a table of 4. The fifth was refused on every run, and it was
+ * always Unmap, because Unmap is hooked last:
+ *
+ *   mvp_patch: internal hooked-function table full (4); refusing to enable
+ *              mvp_patch ID3D11DeviceContext::Unmap
+ *
+ * That is the whole reason the DYNAMIC cb0 path reported maps>0 / unmaps==0 and
+ * let the (context,resource) map table overflow without bound: Map records an
+ * entry, Unmap frees it, and Unmap was never installed. It is NOT the
+ * deferred-context vtable flavour and NOT a legitimately no-op Unmap - the two
+ * standing hypotheses until the log was actually read on 2026-09-08. It also
+ * means the 2026-09-05 (context,resource) re-keying had never once been
+ * exercised.
+ *
+ * Headroom rather than exactly 5: an entry is two pointers of per-module
+ * bookkeeping, and being one short cost a fortnight of wrong diagnoses. */
+#define MVP_MAX_HOOKED_FUNCS 8
 struct HookedFunc {
     void *addr;
     void *orig;
