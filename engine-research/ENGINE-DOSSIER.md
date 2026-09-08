@@ -327,6 +327,94 @@ one recorded upload cannot express a different value per eye `[hypothesis]`. Thi
 affect the pending mono re-test (`TEST_YAW=90`), and the draw-time pool path is unaffected because
 it substitutes at draw time. Revisit **only if the mono re-test passes and stereo is next**.
 
+### ⭐⭐⭐ 7c. `Unmap` WAS NEVER HOOKED - the table was capped at FOUR (2026-09-08, `/lm`, live, two launches)
+
+`[verified-live 2026-09-08]` - and this **supersedes both hypotheses** §7a left standing.
+
+§7a asked why the DYNAMIC cb0 path reported `maps>0, unmaps==0`, and offered two causes:
+**(a)** deferred contexts use a different vtable flavour and `Map`/`Unmap` are never late-hooked, or
+**(b)** on a deferred context `Unmap` can legitimately be a no-op. **Both are wrong.**
+
+**The proxy had been printing the real cause at startup, every run:**
+
+```
+mvp_patch: internal hooked-function table full (4); refusing to enable
+           mvp_patch ID3D11DeviceContext::Unmap
+mvp_patch: Map/Unmap hook failed - the per-shader DYNAMIC cb0 path is INERT this run
+```
+
+`mvp_patch.c` has **five** `hook_one()` call sites - `DrawIndexed`, `Draw`, `CreateBuffer`, `Map`,
+`Unmap` - against `#define MVP_MAX_HOOKED_FUNCS 4`. The fifth is refused every time and it is always
+`Unmap`, because `Unmap` is hooked last. `Map` records a map-table entry, `Unmap` frees it, and
+`Unmap` never existed.
+
+**Raised to 8.** Measured live, same save, same scene:
+
+| counter | OLD build | PATCHED |
+| --- | --- | --- |
+| maps seen | 4,340,705 | 1,803,322 |
+| **unmaps seen** | **0** | **1,803,322 - exactly equal** |
+| unmaps with no recorded map | 0 | 0 |
+| shadow writes | 0 | **1,803,322** |
+| **draws patched via the dynamic path** | **0** | **194,814** |
+| map-table overflows | 4,339,927 | **0** |
+| registered-but-unfed skips | 382,742 | 0 |
+
+Shadow concurrency reads clean: cross-thread writes 1,095,018, **CONCURRENT 0, torn 0** - the
+single-writer precondition holds on this machine.
+
+⭐ **This retroactively vindicates §7a's `(context,resource)` re-keying, which had never once been
+exercised.** Overflows went 4,339,927 → 0. The re-key was correct; it had simply never run. And the
+overflow symptom §7a's predecessor chased was never a table-sizing problem.
+
+**Visual confirmation, the cleanest possible A/B:** same save, same screen, only the build differs -
+the pause menu rendered **normally** on the old build and is **rotated into vertical slivers** on the
+patched one, because `TEST_YAW=90` now reaches draws the dynamic path had never patched.
+
+⚠️ **What this does NOT show:** that the rotation is *correct*, only that it reaches the path. The
+world renders black at `TEST_YAW=90` with both paths patched (window confirmed visible, foreground
+and not minimised first - this build auto-minimises on focus steal and that would fake a black
+capture). Judging the covered/uncovered split needs a scene that stays visible.
+
+⚠️ **The lesson worth more than the fix:** a module that announces its own failure in plain text at
+startup is worthless if nobody reads the log's opening lines. Two sessions built hypotheses about
+deferred-context vtable semantics while line 9 of every log said the hook was refused.
+
+### ⭐⭐ 10b. A VIRTUAL XInput pad drives this game, where `SendInput` cannot (2026-09-08, `/lm`)
+
+`[verified-live 2026-09-08, n=2 launches, full menu→gameplay→exit]` - this **removes the blocker**
+§10a records, and with it the stated purpose of the `GetDeviceState` injector task.
+
+`EvilWithin.exe` imports `XINPUT1_3`, and a **ViGEm virtual pad is that same API with no code at
+all**. It drove the photosensitivity splash (the exact screen `SendInput` could not pass), the
+attract screen, the title menu, `CONTINUE` into Ch.1, the pause menu, and a clean `EXIT` → `YES`
+process exit. The game raised a *"Controller Connected - Xbox 360 controller"* toast and switched its
+prompts to `(A) SELECT / (B) BACK`, so it bound the virtual pad as a real one.
+
+**It is also safer than a real pad:** the DualSense's stick drift walked the highlight from
+`CONTINUE` onto `NEW GAME` on 2026-09-07. A virtual pad's sticks sit dead-centre; drift is
+structurally impossible.
+
+⚠️ **THE TRAP - the first input after each pad connect is SWALLOWED.** Five `DPAD_DOWN` presses moved
+the pause-menu highlight **three** rows; two more in a fresh session moved **zero**. Inside one pad
+lifetime each press moves exactly one row, and the first after connect moves none:
+
+| step (one pad lifetime) | highlight |
+| --- | --- |
+| after 6 s settle | RESTART CHAPTER |
+| +1 `DPAD_DOWN` | RESTART CHAPTER - **swallowed** |
+| +2 `DPAD_DOWN` | OPTIONS |
+| + left stick | TITLE MENU |
+
+**This nearly restarted the chapter**: following §10a's keyboard route ("Down ×5 to TITLE MENU") and
+committing blind would have put `A` on `RESTART CHAPTER`. Only capture-and-verify caught it.
+
+**Working pattern:** do a whole navigation inside ONE pad lifetime, and open each session with a
+throwaway press that cannot move a vertical list (`DPAD_RIGHT`) to absorb the swallowed input.
+
+⚠️ Only **menus** were driven. Whether a virtual pad drives gameplay movement or camera here is
+untested.
+
 ## 8. Pass inventory (by render target)
 - Main scene: 1280×720 colour (formats 28/10/24/61/2 = G-buffer/HDR/aux) with
   1280×720 depth (fmt 44 = D24S8).
