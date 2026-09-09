@@ -44,6 +44,7 @@ Write-Host "Exports from: $def"
 # .s file actually re-exported by name - plain .globl alone is not enough
 # for a DLL, unlike __declspec(dllexport) on a C function.
 & gcc -O2 -shared -static -o "$out\winmm.dll" @incArgs $allSrc $asm $def `
+    '-Wl,--no-insert-timestamp' `
     -luser32 -lshell32 -ld3d11 -ldxgi -lole32 -ldxguid
 if ($LASTEXITCODE -ne 0) { throw "build failed" }
 
