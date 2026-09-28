@@ -22,15 +22,23 @@ int mh_glue_init(void) {
 }
 
 int mh_glue_create_and_enable(void *target, void *detour, void **original, const char *name) {
-    MH_STATUS st;
+    if (!mh_glue_create(target, detour, original, name)) {
+        return 0;
+    }
+    return mh_glue_enable(target, name);
+}
 
-    st = MH_CreateHook(target, detour, original);
+int mh_glue_create(void *target, void *detour, void **original, const char *name) {
+    MH_STATUS st = MH_CreateHook(target, detour, original);
     if (st != MH_OK) {
         log_msg("minhook_glue: MH_CreateHook(%s) failed: %s", name, MH_StatusToString(st));
         return 0;
     }
+    return 1;
+}
 
-    st = MH_EnableHook(target);
+int mh_glue_enable(void *target, const char *name) {
+    MH_STATUS st = MH_EnableHook(target);
     if (st != MH_OK) {
         log_msg("minhook_glue: MH_EnableHook(%s) failed: %s", name, MH_StatusToString(st));
         MH_RemoveHook(target);
