@@ -1,7 +1,9 @@
 #include <windows.h>
 #include "log.h"
+#include "config.h"
 #include "winmm_forward.h"
 #include "hooks.h"
+#include "seqdump.h"
 
 /*
  * Waits (briefly, with short polling sleeps) for d3d11.dll to be loaded by
@@ -35,8 +37,21 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved) {
         DisableThreadLibraryCalls(inst);
         log_init();              /* logger up first, so winmm_forward_init()'s own
                                      failure diagnostics (log_msg calls) are never lost */
+        config_load();           /* tewvr.ini (beside the exe, then %LOCALAPPDATA%\TEWVR) -
+                                     every TEWVR_* knob is read through tewvr_getenv() from
+                                     here on, so a Steam launch can arm them too; see config.h */
         winmm_forward_init();    /* resolve real winmm */
         log_msg("TEWVR winmm proxy attached (pid=%lu)", GetCurrentProcessId());
+
+        /* Task 5 addendum: clear any seqarm.txt left over from a previous
+         * TEWVR_SEQDUMP_ARMFILE=1 session, unconditionally, before any
+         * seqdump logic can run - so a leftover file can never prematurely
+         * arm this (or a later) run. Cheap and fail-safe; see seqdump.h. */
+        seqdump_clear_stale_armfile();
+        /* Task 5 addendum 3: same idea for the TEWVR_SKIPCL live-toggle
+         * control file - a leftover skipcl.txt must not silently start
+         * dropping command lists in a later session. */
+        seqdump_clear_stale_skipcl();
 
         {
             HANDLE h = CreateThread(NULL, 0, bootstrap_thread, NULL, 0, NULL);

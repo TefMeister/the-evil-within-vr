@@ -6,6 +6,10 @@
 #include "log.h"
 #include "d3d_capture.h"
 #include "cbdump.h"
+#include "shaderdump.h"
+#include "seqdump.h"
+#include "mvp_patch.h"
+#include "framecapture.h"
 
 Present_t g_present_orig = NULL;
 
@@ -23,6 +27,16 @@ static HRESULT STDMETHODCALLTYPE Hook_Present(IDXGISwapChain *sc, UINT sync, UIN
     if ((g_frame++ % 120) == 0) {
         log_msg("Present hook alive: frame %llu", (unsigned long long)g_frame);
     }
+
+    /* Task 5 TEWVR_SEQDUMP=1 event stream: cheap no-op unless seqdump's
+     * hooks installed successfully. Drives the "arm 300 frames after the
+     * first Present" logic and emits the PRESENT frame-boundary marker. */
+    seqdump_on_present(g_frame);
+
+    /* SPIKE (2026-08-21, not yet reviewed): TEWVR_FRAMECAPTURE=1 back-buffer
+     * capture-to-disk, file-triggered via capture.txt. See framecapture.h. */
+    framecapture_on_present(g_frame);
+
     return g_present_orig(sc, sync, flags);
 }
 
@@ -76,6 +90,28 @@ cleanup:
          * created, before it is released below. See cbdump.h. */
         cbdump_install(ctx);
     }
+    if (dev && ctx) {
+        /* Temporary Task 4 shader-level RE instrumentation
+         * (TEWVR_SHADERDUMP=1 only, but Task 5 also arms its
+         * CreateVertexShader hook under TEWVR_SEQDUMP=1 - see
+         * shaderdump.h); same throwaway-vtable contract. */
+        shaderdump_install(dev, ctx);
+
+        /* Task 6: the real per-draw MVP override (NOT a TEWVR_* diagnostic
+         * mode - always installed). Same throwaway-vtable contract: reads
+         * ID3D11Device::CreateBuffer's and ID3D11DeviceContext::
+         * DrawIndexed/Draw's vtable slots off these dummy objects, retains
+         * nothing from either. Needs `dev` too (unlike cbdump/shaderdump/
+         * seqdump above) because its Step 0 read mechanism hooks
+         * CreateBuffer on the device vtable - see mvp_patch.h. */
+        mvp_patch_install(dev, ctx);
+    }
+    if (ctx) {
+        /* Task 5 TEWVR_SEQDUMP=1 ordered event-stream instrumentation;
+         * same throwaway-vtable contract as cbdump/shaderdump above. See
+         * seqdump.h. */
+        seqdump_install(ctx);
+    }
     if (sc)  IDXGISwapChain_Release(sc);
     if (ctx) ID3D11DeviceContext_Release(ctx);
     if (dev) ID3D11Device_Release(dev);
@@ -124,5 +160,8 @@ void hooks_remove(void) {
      * still be live when cbdump tears down its own state. */
     mh_glue_shutdown();
     cbdump_remove();
+    shaderdump_remove();
+    seqdump_remove();
+    mvp_patch_remove();
     g_hooks_active = 0;
 }
