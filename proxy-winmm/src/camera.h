@@ -54,3 +54,31 @@ Mat4 mat4_rotation_y(float degrees);
  * against whatever view matrix they actually obtain before relying on it -
  * it is unexercised and unverified by any test in Task 6. */
 Mat4 mat4_translation_local(const Mat4 *view, float dx);
+
+/* ---- clip-space test matrices that stay READABLE (2026-09-30) ----
+ *
+ * mat4_rotation_y() above is applied AFTER projection (mvp' = K * mvp), so
+ * it mixes clip x with clip z. At 90 degrees that gives x' = z: every
+ * vertex's screen x becomes its depth ratio z/w, which is nearly the same
+ * number for everything in view, so the whole frame collapses into one
+ * vertical strip, and half of it gets z' = -x and falls outside the depth
+ * range. That is the "pause menu in vertical slivers" and the black world
+ * of 2026-09-08 (tools/test_k_test.c reproduces both numerically). It
+ * proves the patch lands, but no scene can ever look readable through it.
+ *
+ * These two keep every vertex's depth (z) and w untouched, so nothing is
+ * clipped away and the frame stays readable: anything patched moves,
+ * anything unpatched stays put. Both are exact on screen, for any
+ * projection, because they only touch clip x and y. */
+
+/* Tilts the picture by `degrees` about the screen centre, counter-
+ * clockwise as seen on screen. `aspect` = back-buffer width / height; it is
+ * what keeps the tilt rigid on a non-square screen (without it a 16:9 frame
+ * would shear, not rotate). */
+Mat4 mat4_clip_roll(float degrees, float aspect);
+
+/* Slides the picture sideways by `ndc` in normalised screen units (2.0 =
+ * the full width; +0.1 = 5% of the width to the right). x' = x + ndc * w,
+ * so it is the same shift for near and far geometry: the shape a per-eye
+ * image shift has at infinity. */
+Mat4 mat4_clip_shift_x(float ndc);
