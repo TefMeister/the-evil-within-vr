@@ -15,10 +15,20 @@
 # The file is read ONCE, when the game starts. Edit it, then relaunch.
 
 # --- the visible camera-override test (2026-09-03 FLAT row) -----------------
-# Rotate every patched draw about the vertical axis by this many degrees. The
-# game looks WRONG ON PURPOSE while this is set: it proves the override reaches
-# the screen. Anything that does NOT rotate with the world is geometry the
-# patch still misses. Set to 0 or comment out for normal play.
+# Each of these moves every patched draw ON PURPOSE: anything that does NOT move
+# with the rest of the picture is geometry the patch still misses. Set them to 0
+# or comment them out for normal play.
+#
+# Tilt the picture this many degrees about the screen centre. READABLE: menus
+# stay usable, nothing is clipped. The one to use for a coverage check.
+#TEST_ROLL = 15
+# ...TEST_ROLL needs the screen's width / height to tilt without shearing.
+# Default 1.7778 (16:9).
+#TEST_ASPECT = 1.7778
+# Slide the picture sideways, in screen units (2.0 = the full width).
+#TEST_SHIFT = 0.1
+# The original clip-space yaw. Proves the patch lands, but squeezes the frame
+# into vertical slivers and loses much of the world (tools/test_k_test.c).
 #TEST_YAW = 90
 
 # --- diagnostics (each writes its own file into %LOCALAPPDATA%\TEWVR) --------
