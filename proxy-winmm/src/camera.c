@@ -86,3 +86,33 @@ Mat4 mat4_translation_local(const Mat4 *view, float dx) {
 
     return r;
 }
+
+Mat4 mat4_clip_roll(float degrees, float aspect) {
+    Mat4 r = mat4_identity();
+    double rad = (double)degrees * 3.14159265358979323846 / 180.0;
+    float c = (float)cos(rad);
+    float s = (float)sin(rad);
+
+    if (!(aspect > 0.0f)) {
+        aspect = 1.0f;
+    }
+
+    /* Rotate in pixel-proportional space, where X = x * aspect is the same
+     * scale as y, then scale back: x' = c*x - (s/aspect)*y,
+     * y' = (aspect*s)*x + c*y. z and w rows stay identity. */
+    r.m[0][0] = c;
+    r.m[0][1] = -s / aspect;
+    r.m[1][0] = aspect * s;
+    r.m[1][1] = c;
+
+    return r;
+}
+
+Mat4 mat4_clip_shift_x(float ndc) {
+    Mat4 r = mat4_identity();
+
+    /* x' = x + ndc * w, so x'/w = x/w + ndc for every vertex. */
+    r.m[0][3] = ndc;
+
+    return r;
+}

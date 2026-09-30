@@ -11,6 +11,7 @@
 #include "mvptable.h"
 #include "shaderdump.h"
 #include "camera.h"
+#include "test_k.h"
 
 /*
  * ---- Step 0: chosen read mechanism, and why (REVISED after review) ----
@@ -2261,9 +2262,6 @@ void mvp_patch_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx) 
     void **ctx_vtbl;
     void **dev_vtbl;
     int ok_di, ok_d, ok_cb, ok_us;
-    char flagbuf[32];
-    DWORD len;
-    float deg;
 
     if (g_installed) {
         return;
@@ -2364,20 +2362,10 @@ void mvp_patch_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx) 
         return;
     }
 
-    /* TEWVR_TEST_YAW: read once here, synchronously, on the bootstrap
-     * thread - strictly before the hooks just enabled above can possibly
-     * be reached by a real draw. */
-    len = tewvr_getenv("TEWVR_TEST_YAW", flagbuf, sizeof(flagbuf));
-    deg = (len > 0 && len < sizeof(flagbuf)) ? (float)atof(flagbuf) : 0.0f;
-    if (deg != 0.0f) {
-        g_K = mat4_rotation_y(deg);
-        log_msg("mvp_patch: TEWVR_TEST_YAW=%.3f -> test rotation K ACTIVE (every patchable draw rotated)",
-                 (double)deg);
-    } else {
-        g_K = mat4_identity();
-        log_msg("mvp_patch: TEWVR_TEST_YAW unset/0 (neither the environment nor tewvr.ini set it) -> K = identity "
-                 "(read/patch/rebind mechanism still exercised every patchable draw; no visible change expected)");
-    }
+    /* The test matrix K (TEST_YAW / TEST_ROLL / TEST_SHIFT, test_k.c): read
+     * once here, synchronously, on the bootstrap thread - strictly before
+     * the hooks just enabled above can possibly be reached by a real draw. */
+    g_K = test_k_from_config();
 
     g_installed = 1;
     log_msg("mvp_patch: installed (DrawIndexed=%d Draw=%d UpdateSubresource=%d; CreateBuffer=%d, "
