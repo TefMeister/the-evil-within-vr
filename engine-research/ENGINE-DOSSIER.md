@@ -122,6 +122,11 @@ and the assumption throughout was that a runtime dump is the only source.
   `K_eye = P_eye · T_eye(±IPD/2 x) · P⁻¹`, identical for all draws — no
   per-object knowledge. `P` from `g_fov` + aspect (or a shader receiving
   `projectionmatrixz`).
+- **Test matrices that stay readable (2026-09-30).** A test `K` applied in clip space must leave clip
+  `z` and `w` alone, or it clips the scene. `TEST_ROLL` (aspect-corrected tilt) and `TEST_SHIFT`
+  (sideways slide) do; `TEST_YAW` does not (§11). Both are exact for any projection
+  `[verified-numerically 2026-09-30]`, `proxy-winmm/tools/test_k_test.c`, 12/12. Built and deployed on
+  the dev PC with `TEST_ROLL = 15`, unlaunched.
 
 ## 7. Constant-buffer fill mechanism (FINAL — proven, Task 6 closed 2026-08-21)
 - The world's per-object MVP lives in a **small pool of ~6 constant buffers**
@@ -557,6 +562,12 @@ proxy rather than as a second DLL. Source: `staging/prince-of-persia-2008-vr/pro
 Evidence: `dev-archive/recon/2026-09-07-sendinput-does-not-reach-tew/`.
 
 ## 11. Dead ends & false leads (save future time)
+- **⚠️ `TEST_YAW = 90` can never give a readable picture (2026-09-30).** Applied after projection it
+  sets `x' = z`, so every vertex's screen x becomes its depth ratio: 17,640 test points collapse into a
+  strip 2.5% of the screen wide, about half leave the depth range, and a flat menu row lands in one
+  column `[verified-numerically 2026-09-30]`. That is the 2026-09-08 "slivers" and black world. A
+  "clean visible-rotation read" with it was never possible; use `TEST_ROLL` (§6). Notes:
+  `modding-notes/2026-09-30-the-90-degree-test-could-never-be-read.md`.
 - **⚠️ Do not read `thread-ring pool exhausted` as an explanation of a pairing failure
   (2026-09-05).** That line is emitted by the **draw-time scratch-buffer rings**, and its own text
   says the patch stays correct through it via `WRITE_DISCARD` renaming. On 2026-09-04d it sat in
