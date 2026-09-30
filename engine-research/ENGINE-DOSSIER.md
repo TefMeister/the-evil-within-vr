@@ -771,3 +771,34 @@ Evidence: `dev-archive/recon/2026-09-07-sendinput-does-not-reach-tew/`.
   proven sufficient for an ownership proof but explicitly not the real
   per-eye transform — Task 7/8 must build the actual `K_eye` per §6's
   documented maths.
+
+## 2026-09-30: the tilt read (`/lm`, dev PC) and the file split
+
+**What the patch reaches, seen with `TEST_ROLL = 15`** (a readable 15° tilt; `TEST_YAW = 90` could never
+be read, §11):
+
+- **Menus and 2D screens tilt**: logos, the photosensitivity warning, title menu, options, save list,
+  pause menu, confirm dialogs `[verified-live 2026-09-30, n=2 launches]`. Menu **text** and the bottom hint
+  line stay level, so text goes another way again `[verified-live 2026-09-30, n=2]`.
+- **Chapter 2 safe room: the 3D world tilts** (noticeboard, lamp, doorway), consistently after a camera
+  turn `[verified-live 2026-09-30, n=1]`.
+- **Chapter 1 street outside the asylum: the world stays level**, with a tilted "ghost" copy of some
+  objects (fences, the police car's lettering doubled) `[verified-live 2026-09-30, n=1]`, although the
+  counters said ~97% of draws with an MVP were patched there (patched ≈1.23 M per 5 s, pool_miss ≈30 k,
+  shader_no_mvp ≈14 k). Why the visible street escapes is **unknown**: other shaders, a pass that redraws
+  it unpatched, or tessellated geometry (§8) are all open `[hypothesis]`.
+- The pause/cutscene background during a Chapter 1 cutscene looked tilted, but may be a frozen copy of the
+  frame drawn as a flat picture; not counted either way.
+- Screenshots and a log extract: `dev-archive/recon/2026-09-30-tilt-read/`.
+
+**`mvp_patch.c` split move-only into six files** (all under 800 lines; `mvp_patch_internal.h` shares 76
+de-`static`ed names). Same 180 exports, 0 warnings before and after, `map_pairing_test` 17/17 and
+`test_k_test` 12/12 `[compile-verified 2026-09-30]`. Not byte-identical (+3,072 B: eight helpers no longer
+inlined, `.refptr` stubs). Live smoke run passed: same start-up line, counters running, tilt visible,
+gameplay reached `[verified-live 2026-09-30, n=1]`. On `stereo-6dof-core` as `c1f2373`; backup tag
+`pre-split-2026-09-30`. The reader's full note: `dev-archive/recon/2026-09-30-tilt-read/reader-mvp-patch-split.md`.
+
+**Automation, learned today:** a save loads gameplay in about a minute (LOAD GAME → Chapter 2 safe room),
+and the window closes cleanly in about 4 s through WM_CLOSE (like clicking its X), far quicker than the
+two-stage menu exit. Music is muted through Options → Audio → Music Volume 0, which saves as
+`s_volume_music "-60"`; adding `s_playMusic "0"` to the config does not survive, the game rewrites the file.
