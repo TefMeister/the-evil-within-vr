@@ -1,6 +1,8 @@
 # Research index
 
-**Last `/gr` pass: 2026-09-29 (estate sweep) — CHECK-IN.** Nothing new. Top rows are `[FLAT]` (a clean visible-rotation read; does a virtual pad drive gameplay) and a home-PC rebuild; no public question in front of them.
+**Last `/gr` pass: 2026-10-04 (estate sweep, second pass) — CHECK-IN.** Inbox empty; board `OPEN` rows read: the Chapter 1 street tilt and the virtual-pad test, both launches. Nothing new.
+
+_Previous: **Last `/gr` pass: 2026-09-29 (estate sweep) — CHECK-IN.** Nothing new. Top rows are `[FLAT]` (a clean visible-rotation read; does a virtual pad drive gameplay) and a home-PC rebuild; no public question in front of them._
 
 _Previous: **Last `/gr` pass: 2026-09-23 (estate sweep) — CHECK-IN.** Checked phunkaeg's *VR Modding Playbook*: it lists this project's external research as a studied source; no other id Tech 5 entry. Nothing new._
 
