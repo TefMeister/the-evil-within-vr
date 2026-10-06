@@ -138,7 +138,11 @@ static void game_try_publish(void) {
     set_release(&g_old);
 }
 
-int tew_share_capture(IDXGISwapChain *sc, int eye) {
+/* Head pose each eye's picture was drawn with (OpenXR quaternion). Written and read only while that eye's keyed
+ * mutex is held, so a picture and its pose always travel together. */
+static float g_eye_pose[2][4] = { { 0, 0, 0, 1 }, { 0, 0, 0, 1 } };
+
+int tew_share_capture(IDXGISwapChain *sc, int eye, const float pose[4]) {
     ID3D11Texture2D *bb = NULL;
     D3D11_TEXTURE2D_DESC bd;
     int i, wrote = 0, first = eye < 0 ? 0 : eye, last = eye < 0 ? 1 : eye;
@@ -160,6 +164,7 @@ int tew_share_capture(IDXGISwapChain *sc, int eye) {
                                                    0, bd.Format);
         else
             ID3D11DeviceContext_CopyResource(g_d3d.ctx, (ID3D11Resource *)g_cur.tex[i], (ID3D11Resource *)bb);
+        if (pose) memcpy(g_eye_pose[i], pose, sizeof g_eye_pose[i]);
         IDXGIKeyedMutex_ReleaseSync(g_cur.km[i], EYE_SYNC_KEY);
         InterlockedIncrement(&g_serial[i]);
         g_st_game_copies++;
@@ -226,6 +231,7 @@ void tew_share_pull(TewXrEyes *x, ID3D11DeviceContext *ctx) {
         if (!x->km[i] || s == x->seen[i]) continue;
         if (IDXGIKeyedMutex_AcquireSync(x->km[i], EYE_SYNC_KEY, EYE_NO_WAIT_MS) != S_OK) { g_st_xr_busy++; continue; }
         ID3D11DeviceContext_CopyResource(ctx, (ID3D11Resource *)x->held[i], (ID3D11Resource *)x->shared[i]);
+        memcpy(x->pose[i], g_eye_pose[i], sizeof x->pose[i]);
         IDXGIKeyedMutex_ReleaseSync(x->km[i], EYE_SYNC_KEY);
         x->seen[i] = s;
         x->have[i] = 1;

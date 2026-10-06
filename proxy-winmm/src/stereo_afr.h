@@ -41,6 +41,10 @@ const Mat4 *stereo_afr_current_k(void);
  * Read on the render thread at Present, before stereo_afr_on_present() flips it (tew_xr.c). */
 int stereo_afr_current_eye(void);
 
+/* HEAD TRACKING (HEADTRACK = 1, head_track.h): the OpenXR head orientation (x, y, z, w) the frame now being drawn
+ * was turned by, identity when none. Game thread only, read at Present before the flip, like the eye above. */
+void stereo_afr_current_pose(float q[4]);
+
 /* MENUS AND HUD STAY MONO (2026-10-06, reader). 2D draws carry an orthographic MVP whose last row is [0,0,0,1]
  * (w = 1 for every vertex); world draws carry a perspective one whose last row has non-zero xyz (w = depth).
  * Pure: 1 when mvp's row 3 is [0,0,0,w!=0] within STEREO_FLAT_EPS. */
