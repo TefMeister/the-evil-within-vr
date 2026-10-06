@@ -22,6 +22,7 @@
 #include "shaderdump.h"
 #include "camera.h"
 #include "test_k.h"
+#include "stereo_afr.h"
 
 /* vtable indices, cross-checked against shaderdump.c's and seqdump.c's own
  * already-verified counts. ID3D11DeviceContext: DrawIndexed=12, Draw=13.

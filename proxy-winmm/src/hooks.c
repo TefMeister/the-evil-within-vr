@@ -10,6 +10,7 @@
 #include "seqdump.h"
 #include "mvp_patch.h"
 #include "framecapture.h"
+#include "stereo_afr.h"
 
 Present_t g_present_orig = NULL;
 
@@ -37,7 +38,12 @@ static HRESULT STDMETHODCALLTYPE Hook_Present(IDXGISwapChain *sc, UINT sync, UIN
      * capture-to-disk, file-triggered via capture.txt. See framecapture.h. */
     framecapture_on_present(g_frame);
 
-    return g_present_orig(sc, sync, flags);
+    /* 2026-10-06: alternate-frame stereo flips the eye here; the frame being presented keeps its eye. */
+    {
+        HRESULT hr = g_present_orig(sc, sync, flags);
+        stereo_afr_on_present();
+        return hr;
+    }
 }
 
 /*
