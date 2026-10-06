@@ -19,6 +19,7 @@
 #include "tew_xr.h"
 #include "tew_xr_internal.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -28,6 +29,7 @@
 #include <openxr/openxr_platform.h>
 
 #include "config.h"
+#include "head_track.h"
 #include "log.h"
 #include "stereo_afr.h"
 
@@ -88,7 +90,7 @@ static XrVector3f g_anchor;
 static int g_anchored;
 static unsigned long g_frames, g_wait_timeouts;
 static unsigned long g_hframes, g_layer_frames;   /* v2 diagnostics: all headset frames / ones that carried layers */
-static int g_last_layers, g_quad_logged;
+static int g_last_layers, g_quad_logged, g_head_logged;
 static TewXrEyes g_x;
 
 /* ---- Start-up, on the headset thread ------------------------------------------------------------- */
@@ -355,6 +357,16 @@ static void submit_frame(void) {
             log_msg("tew_xr: screen placed at head height %.2f m", (double)g_anchor.y);
         }
     }
+    if (head_track_on() && g_view_space) {           /* the newest head orientation, for the game's next frame */
+        XrSpaceLocation hl = { XR_TYPE_SPACE_LOCATION };
+        if (XR_SUCCEEDED(p_xrLocateSpace(g_view_space, g_space, fs.predictedDisplayTime, &hl)) &&
+            (hl.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) {
+            HeadQuat q;
+            q.x = hl.pose.orientation.x; q.y = hl.pose.orientation.y;
+            q.z = hl.pose.orientation.z; q.w = hl.pose.orientation.w;
+            head_track_publish_pose(q);
+        }
+    }
     if (g_proj_layers) {
         XrViewLocateInfo vi = { XR_TYPE_VIEW_LOCATE_INFO };
         XrViewState vst = { XR_TYPE_VIEW_STATE };
@@ -373,6 +385,8 @@ static void submit_frame(void) {
         if (filled != 2) {
             /* an eye without a released image cannot go in a layer: submit an empty frame */
         } else if (g_proj_layers && views_ok) {
+            HeadLens lens;
+            int head = head_track_lens(&lens), rect[4];
             for (e = 0; e < 2; ++e) {
                 memset(&pv[e], 0, sizeof pv[e]);
                 pv[e].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
@@ -381,6 +395,26 @@ static void submit_frame(void) {
                 pv[e].subImage.swapchain = g_chain[e].sc;
                 pv[e].subImage.imageRect.extent.width = (int32_t)g_x.w;
                 pv[e].subImage.imageRect.extent.height = (int32_t)g_x.h;
+                if (head) {   /* HEAD TRACKING: the picture is the game's lens, turned the way the head pointed */
+                    float l, r, u, d;
+                    pv[e].pose.orientation.x = g_x.pose[e][0]; pv[e].pose.orientation.y = g_x.pose[e][1];
+                    pv[e].pose.orientation.z = g_x.pose[e][2]; pv[e].pose.orientation.w = g_x.pose[e][3];
+                    if (head_lens_tangents(&lens, &l, &r, &u, &d)) {
+                        pv[e].fov.angleLeft = atanf(l); pv[e].fov.angleRight = atanf(r);
+                        pv[e].fov.angleUp = atanf(u);   pv[e].fov.angleDown = atanf(d);
+                    }
+                    head_lens_image_rect(&lens, g_x.w, g_x.h, rect);
+                    pv[e].subImage.imageRect.offset.x = rect[0]; pv[e].subImage.imageRect.offset.y = rect[1];
+                    pv[e].subImage.imageRect.extent.width = rect[2]; pv[e].subImage.imageRect.extent.height = rect[3];
+                }
+            }
+            if (head && !g_head_logged) {
+                g_head_logged = 1;
+                log_msg("tew_xr: head-tracked views: fov L%.1f R%.1f U%.1f D%.1f deg, picture %d,%d %dx%d of %ux%u",
+                        (double)(pv[0].fov.angleLeft * 57.29578f), (double)(pv[0].fov.angleRight * 57.29578f),
+                        (double)(pv[0].fov.angleUp * 57.29578f), (double)(pv[0].fov.angleDown * 57.29578f),
+                        pv[0].subImage.imageRect.offset.x, pv[0].subImage.imageRect.offset.y,
+                        pv[0].subImage.imageRect.extent.width, pv[0].subImage.imageRect.extent.height, g_x.w, g_x.h);
             }
             memset(&proj, 0, sizeof proj);
             proj.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION;
@@ -491,6 +525,7 @@ void tew_xr_init(void) {
     if (g_stage != XR_STAGE_OFF) return;
     if (!knob("TEWVR_OPENXR", v, sizeof v) || atoi(v) == 0) { log_msg("tew_xr: off (OPENXR is not 1)"); return; }
     g_proj_layers = knob("TEWVR_OPENXR_LAYERS", v, sizeof v) && _stricmp(v, "projection") == 0;
+    if (head_track_on()) g_proj_layers = 1;   /* a head-turned picture only makes sense as per-eye views */
     g_test_pattern = knob("TEWVR_OPENXR_TEST_PATTERN", v, sizeof v) && atoi(v) != 0;
     tew_share_init();
     InterlockedExchange(&g_stage, XR_STAGE_LOADING);
@@ -515,5 +550,9 @@ void tew_xr_shutdown(void) {
 void tew_xr_on_present(IDXGISwapChain *sc) {
     if (!g_live || !d3d_capture_ready()) return;
     /* The frame being presented was drawn for the eye stereo_afr holds until it flips, just after the real Present. */
-    tew_share_capture(sc, stereo_afr_current_eye());
+    {
+        float pose[4];
+        stereo_afr_current_pose(pose);
+        tew_share_capture(sc, stereo_afr_current_eye(), pose);
+    }
 }

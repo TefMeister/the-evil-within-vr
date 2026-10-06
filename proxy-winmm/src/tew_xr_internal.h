@@ -22,7 +22,7 @@ void tew_share_init(void);
 
 /* GAME THREAD, at Present, before the real Present: copy back buffer 0 into eye `eye` (0/1), or both when eye < 0.
  * Never blocks: a busy eye texture is skipped. Returns 1 if at least one eye was written. */
-int tew_share_capture(IDXGISwapChain *sc, int eye);
+int tew_share_capture(IDXGISwapChain *sc, int eye, const float pose[4]);   /* pose: head pose it was drawn with, or NULL */
 
 /* Headset-thread side: everything here belongs to the headset thread and its device only. */
 typedef struct {
@@ -34,6 +34,7 @@ typedef struct {
     ID3D11Texture2D *held[2];      /* our own copy of each eye's newest picture */
     LONG seen[2];                  /* game serial last copied into held[] */
     int have[2];                   /* held[e] holds a picture */
+    float pose[2][4];              /* the head pose held[e] was drawn with (OpenXR x, y, z, w) */
 } TewXrEyes;
 
 /* Open the newest published set if it changed. 1 = a new set is open (rebuild swapchains), 0 = unchanged,
