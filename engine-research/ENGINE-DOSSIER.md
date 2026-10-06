@@ -943,3 +943,20 @@ Full write-up: `modding-notes/2026-10-06-head-tracking-built.md`.
   alone; shadows did not swim in the captures `[verified-live 2026-10-06, n=1]`.
 - Evidence: `dev-archive/recon/2026-10-06-head-tracking-simulator/` (5 captures + log lines).
 - Installed now: same build, `STEREO = 0`, `OPENXR = 0`, `HEADTRACK = 0` (normal play).
+
+### 2026-10-06 (late night, `/lm` reader, static): where the real camera lives — partial survey
+
+Folded from inbox `2026-10-06-lm-camera-angles.md`. Not needed urgently: big head turns already work on the street.
+- `EvilWithin.exe` `.text` is encrypted at rest; strings, RTTI and type descriptions are readable. The reader's
+  attempt to work from a decrypted copy was refused by the session's permission system and deleted; **do not repeat
+  it from a static lane without Tefa's say-so**. The live route (attach in `/lm` after the game has decrypted
+  itself, dossier §4) is the open alternative.
+- Lead: `"NaN in renderView vieworg!"` / `"viewaxis!"` are referenced in RVA `0x24E680` (RenderView.cpp), the check on
+  the finished camera just before drawing — the natural place to turn the real camera `[hypothesis]`.
+- Type descriptions show a struct with player origin +0x00, player axis +0x0C, view origin +0x30, view axis (3x3)
+  +0x3C, entity +0x60 and a 488-byte `renderView_t` at +0x68 (inner layout not described) `[inferred-static 2026-10-06]`.
+  `viewAngles` / `deltaViewAngles` field names exist (offsets not read).
+- `STEREO_RENDER_LEFT_AND_RIGHT` / `TOP_AND_BOTTOM` strings exist: an old 3D-TV stereo mode, contrary to the earlier
+  "no stereo strings" note; whether any code still uses it is unknown `[inferred-static 2026-10-06]`.
+- If the real camera is ever turned: set `K_head` to identity on those frames (no double turn), keep sending the
+  headset the pose the frame was drawn with; expect the crosshair to leave screen centre.
