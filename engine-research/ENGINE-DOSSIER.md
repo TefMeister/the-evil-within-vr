@@ -873,3 +873,38 @@ things carry more uncrossed disparity than near ones, the correct depth order. E
   CPU readback otherwise; game-thread `xrWaitFrame` paces the game to the headset. `OPENXR = 1`,
   `OPENXR_RUNTIME_JSON`, `OPENXR_LAYERS = projection`. Build `e05934d007ca`, 180 exports `[compile-verified 2026-10-06]`.
   x64 loader fetched (gitignored). **Not run.**
+
+### ✅ RUN 2026-10-06 (late evening, `/lm`, dev PC, OpenXR simulator): THE GAME IN BOTH EYES OF A HEADSET
+
+Five launches, one reader building between them. Folded from inbox notes `2026-10-06-pd-menus-out-of-stereo`,
+`-combined-build`, `-xr-own-device`, `-xr-own-device-v2`.
+
+- **Menus and HUD stay out of the eye shift** `[verified-live 2026-10-06, n=2]`: a draw whose MVP last row is exactly
+  `[0,0,0,1]` (orthographic, w = 1) gets the mono matrix only (`stereo_afr_k_for`, `STEREO_UI_MONO`, default on;
+  `STEREO_FLAT_EPS = 1e-7`). At `k = 2` the title menu's text measured 0 px between eye frames while the corridor
+  behind it shifted; the pause menu stays on screen. Host test 16,002 checks, broken-rule plant fails 4,000.
+  Spot-light shadow passes still get the eye shift (wrong for a shadow map) `[hypothesis]`.
+- **Only the game's own swapchain runs per-frame work** (`hooks.c`). The OpenXR simulator draws its preview window
+  with a DXGI swapchain inside the game process, so our Present hook also sees it.
+  - v1 took "the first swapchain presented": the simulator's preview presented first (from inside `xrEndFrame`) and
+    was captured as the game's — eye flips and copies ran on the wrong window, preview black `[verified-live 2026-10-06, n=1]`.
+  - v2: the session waits for the game's first Present, and any Present on the headset thread or into a window that
+    thread created is passed straight through.
+- **XR on the game's own device + game thread DEADLOCKS** `[verified-live 2026-10-06, n=2]`: first try froze the game
+  ~9 s in; with the filter, the game presented once and then stopped (simulator log ends at frame 2's second
+  `xrAcquireSwapchainImage`). Cause (runtime and game sharing the immediate context) `[hypothesis]`. **Dead end: do not
+  put the XR session on the game's device.**
+- **What works — own device, own thread** (`tew_xr.c`, `tew_xr_eyes.c`, build `c0342d5c2975`): the headset thread is
+  the only thread calling `xr*`, with its own D3D11 device on the runtime's adapter. The game thread only copies the
+  back buffer into a per-eye `SHARED_KEYEDMUTEX` texture (`AcquireSync(0, 0 ms)`, skip if busy) and bumps a serial;
+  the headset thread pulls the newest with 0 ms waits. No CPU fallback (different-card runtime logs and sends
+  nothing). The game is no longer paced to the headset.
+- **Result** `[verified-live 2026-10-06, n=1]`: title menu and Chapter 1 street visible in both eyes of the simulator
+  as one floating screen per eye; the two eyes' pictures differ (facade shifts more than Sebastian, matching the flat
+  burst). Game ~60 fps; diag: 5401 headset frames, every frame with 2 layers, 3549 game copies = 3549 headset pulls,
+  0 busy, 0 open failures. Evidence: `dev-archive/recon/2026-10-06-headset-simulator-first-picture/`.
+- Settings: `OPENXR = 1`, `OPENXR_RUNTIME_JSON` (this process only; the 64-bit simulator json), `OPENXR_LAYERS`
+  (`projection` not yet tried here), `OPENXR_TEST_PATTERN = 1` (red/blue eyes). `openxr_loader.dll` (x64,
+  NuGet 1.0.10.2, `7d0a7cbb3fd2`) beside `EvilWithin.exe`.
+- **Installed now (dev PC):** `winmm.dll` `c0342d5c2975` + loader, `STEREO = 0`, `OPENXR = 0` (normal play).
+- **Not yet:** head tracking (the camera does not follow the headset), projection layers, real headset.
