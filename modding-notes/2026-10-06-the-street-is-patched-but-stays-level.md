@@ -45,3 +45,9 @@ pre-rendered layer the street reuses), or our edit applied after the GPU already
 
 Evidence: `dev-archive/recon/2026-10-06-street-drawtrace/`; recorder and analyser in
 `staging/the-evil-within-vr/reader-seqdump-2026-10-06/`.
+
+## Correction, same evening
+
+Tefa watched the street in the running game with the tilt on and reports that **everything tilts**. So the street
+never escaped: the "stays level" reading came from my screenshots, where a whole scene leaning together is easy to
+misread. The recorder's result (every visible draw reached) was the truth all along. `[verified-live 2026-10-06, n=1]`
