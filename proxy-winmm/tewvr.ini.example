@@ -53,3 +53,14 @@
 
 # Back-buffer capture to disk, triggered by creating %LOCALAPPDATA%\TEWVR\capture.txt.
 #FRAMECAPTURE = 1
+
+# --- headset output (OpenXR), 2026-10-06 ---------------------------------------
+# Show the game in an OpenXR headset: one floating screen per eye, each eye seeing
+# only the frames drawn for it (use with STEREO = 1). Needs the 64-bit
+# openxr_loader.dll beside EvilWithin.exe. The game is paced to the headset.
+#OPENXR = 1
+# Use this OpenXR runtime for this game only (path to its runtime .json).
+#OPENXR_RUNTIME_JSON = C:\path\to\runtime.json
+# Send each eye as a full-view projection instead of a floating screen. Only
+# looks right once the game camera uses the headset's eye lenses (not yet).
+#OPENXR_LAYERS = projection
