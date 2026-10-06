@@ -351,7 +351,7 @@ have_shadow:
         mvp.m[row][2] = f[2];
         mvp.m[row][3] = f[3];
     }
-    patched = mat4_mul(g_K, mvp);
+    patched = mat4_mul(*stereo_afr_current_k(), mvp);   /* g_K, or this frame's eye (stereo_afr.c) */
     for (row = 0; row < 4; row++) {
         float *f = (float *)(local_copy + offs[row]);
         f[0] = patched.m[row][0];

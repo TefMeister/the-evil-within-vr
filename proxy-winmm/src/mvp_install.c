@@ -217,6 +217,7 @@ void mvp_patch_install(ID3D11Device *dummy_dev, ID3D11DeviceContext *dummy_ctx) 
      * once here, synchronously, on the bootstrap thread - strictly before
      * the hooks just enabled above can possibly be reached by a real draw. */
     g_K = test_k_from_config();
+    stereo_afr_init(g_K);   /* STEREO = 1: alternate-frame eyes built on top of g_K */
 
     g_installed = 1;
     log_msg("mvp_patch: installed (DrawIndexed=%d Draw=%d UpdateSubresource=%d; CreateBuffer=%d, "
