@@ -856,3 +856,20 @@ Branch `stereo-6dof-core` `e19f0fc`, `winmm.dll` `650b008b4402` deployed on the 
 - **Risks to watch live:** command lists recorded for frame N+1 while frame N presents would carry the wrong eye
   (§7 "Map-time stereo" parked note; the draw-time pool path is unaffected); motion vectors / TAA history see the
   eye jump every frame. The drawtrace build was replaced by this one (kept in `staging/the-evil-within-vr/`).
+
+### ✅ RUN 2026-10-06 (evening, `/lm`): ALTERNATE-FRAME STEREO ALTERNATES, WITH THE RIGHT DEPTH ORDER
+
+`650b008b4402`, `STEREO = 1`, `TEST_ROLL = 0`. At `STEREO_K = 0.05` nothing visible (sub-pixel: this game's depth
+constant `B` is small next to its view depths), so the eye term needs a large `k`. At `STEREO_K = 2.0`,
+`STEREO_C = 0.98`, 24 screen grabs ~13 ms apart on the Chapter 1 street fall into **two groups**; between them the far
+asylum facade shifts **50 px** and the near railing **36 px** `[verified-live 2026-10-06, n=1, 24 frames]`: far
+things carry more uncrossed disparity than near ones, the correct depth order. Evidence:
+`dev-archive/recon/2026-10-06-alternate-frame-stereo-first-run/`.
+- **The flat menus get the eye shift too**: at `k = 2` the title and pause menus slide off screen (their `z/w` is
+  far from `c`). Real stereo needs menus/HUD excluded or treated separately (also noted 2026-09-30).
+- Left installed with `STEREO = 0` (normal play), `STEREO_K = 2.0`, `STEREO_C = 0.98` kept for the next test.
+- **Headset bridge built (reader, staging only):** `staging/the-evil-within-vr/reader-xr-2026-10-06/` — `tew_xr.c`
+  sends each eye to OpenXR at Present, on the game's own D3D11 device (GPU copy) when the runtime's adapter matches,
+  CPU readback otherwise; game-thread `xrWaitFrame` paces the game to the headset. `OPENXR = 1`,
+  `OPENXR_RUNTIME_JSON`, `OPENXR_LAYERS = projection`. Build `e05934d007ca`, 180 exports `[compile-verified 2026-10-06]`.
+  x64 loader fetched (gitignored). **Not run.**
