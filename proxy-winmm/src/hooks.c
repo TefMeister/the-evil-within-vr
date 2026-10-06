@@ -11,18 +11,94 @@
 #include "mvp_patch.h"
 #include "framecapture.h"
 #include "stereo_afr.h"
+#include "tew_xr.h"
 
 Present_t g_present_orig = NULL;
+
+#define HOOKS_FOREIGN_LOG_EVERY 600  /* non-game Presents between count lines */
 
 static UINT64 g_frame = 0;
 static int g_hooks_active = 0;
 
+/*
+ * ONLY THE GAME'S SWAPCHAIN RUNS OUR PER-FRAME WORK (2026-10-06, reader). The Present hook sits on the vtable every
+ * swapchain in the process shares, and the OpenXR simulator's preview window is a swapchain INSIDE this process: its
+ * Presents flipped the stereo eye and made tew_xr resize its eye images 1280x720 <-> 1728x824 every few frames.
+ * The game's swapchain is the first one presented (captured by d3d_capture before any XR session can exist, since
+ * the session is created on the game's captured device). A later swapchain counts as the game's only if it draws
+ * into the SAME window (the game recreating its swapchain); it is then adopted. Everything else just presents.
+ * The device is NOT a test: the simulator presents on the game's own device. See also is_runtime_present() (v2).
+ */
+static HWND g_game_hwnd;                   /* the window of the first captured swapchain */
+static IDXGISwapChain *g_foreign_last;     /* last non-game swapchain seen, so GetDesc runs once per swapchain */
+static volatile LONG g_foreign_presents;   /* non-game Presents passed straight through */
+
+/* v2 (2026-10-06, live finding): the OWN-DEVICE build started its session before the game's first Present, so the
+ * simulator's preview Presented first - from inside our xrEndFrame, on the headset thread - and was taken for the
+ * game's swapchain (log: window "OpenXR Simulator (Mouse Look + WASD)", 1728x784). A Present on the headset thread,
+ * or into a window that thread created, is the runtime's, never the game's. */
+static int is_runtime_present(IDXGISwapChain *sc) {
+    DWORD xr_tid = tew_xr_headset_tid();
+    DXGI_SWAP_CHAIN_DESC d;
+    if (xr_tid == 0) return 0;
+    if (GetCurrentThreadId() == xr_tid) return 1;
+    if (d3d_capture_ready()) return 0;          /* after capture, is_game_swapchain() decides */
+    ZeroMemory(&d, sizeof(d));
+    return SUCCEEDED(IDXGISwapChain_GetDesc(sc, &d)) && d.OutputWindow &&
+           GetWindowThreadProcessId(d.OutputWindow, NULL) == xr_tid;
+}
+
+static int is_game_swapchain(IDXGISwapChain *sc) {
+    DXGI_SWAP_CHAIN_DESC d;
+    if (sc == g_d3d.sc) return 1;
+    if (sc == g_foreign_last) return 0;
+    ZeroMemory(&d, sizeof(d));
+    if (g_game_hwnd != NULL && SUCCEEDED(IDXGISwapChain_GetDesc(sc, &d)) && d.OutputWindow == g_game_hwnd) {
+        log_msg("hooks: the game recreated its swap-chain (%p -> %p, %ux%u, same window); adopting it",
+                (void *)g_d3d.sc, (void *)sc, (unsigned)d.BufferDesc.Width, (unsigned)d.BufferDesc.Height);
+        g_d3d.sc = sc;
+        g_d3d.width = d.BufferDesc.Width;
+        g_d3d.height = d.BufferDesc.Height;
+        g_d3d.format = d.BufferDesc.Format;
+        return 1;
+    }
+    g_foreign_last = sc;
+    log_msg("hooks: Present from a swap-chain that is not the game's (%p, window %p, %ux%u) - passed straight "
+            "through, no per-frame work (e.g. the OpenXR simulator's preview)",
+            (void *)sc, (void *)d.OutputWindow, (unsigned)d.BufferDesc.Width, (unsigned)d.BufferDesc.Height);
+    return 0;
+}
+
+static void note_game_window(void) {
+    DXGI_SWAP_CHAIN_DESC d;
+    char title[128] = "", cls[128] = "";
+    ZeroMemory(&d, sizeof(d));
+    if (g_d3d.sc == NULL || FAILED(IDXGISwapChain_GetDesc(g_d3d.sc, &d))) return;
+    g_game_hwnd = d.OutputWindow;
+    GetWindowTextA(g_game_hwnd, title, sizeof(title));
+    GetClassNameA(g_game_hwnd, cls, sizeof(cls));
+    log_msg("hooks: game swap-chain %p draws to window %p, title \"%s\", class \"%s\"; only it runs per-frame work",
+            (void *)g_d3d.sc, (void *)g_game_hwnd, title, cls);
+}
+
 static HRESULT STDMETHODCALLTYPE Hook_Present(IDXGISwapChain *sc, UINT sync, UINT flags) {
+    if (is_runtime_present(sc)) {
+        if ((InterlockedIncrement(&g_foreign_presents) % HOOKS_FOREIGN_LOG_EVERY) == 1)
+            log_msg("hooks: %ld headset-runtime Present(s) passed through (headset thread or its window)",
+                    (long)g_foreign_presents);
+        return g_present_orig(sc, sync, flags);
+    }
     if (!d3d_capture_ready()) {
         /* First-Present-only; d3d_capture_from_present() is itself a no-op
          * once ready, but the ready-check here avoids the call overhead on
          * every subsequent frame. */
         d3d_capture_from_present(sc);
+        if (d3d_capture_ready()) note_game_window();
+    }
+    if (!d3d_capture_ready() || !is_game_swapchain(sc)) {
+        if (d3d_capture_ready() && (InterlockedIncrement(&g_foreign_presents) % HOOKS_FOREIGN_LOG_EVERY) == 0)
+            log_msg("hooks: %ld non-game Present(s) passed through so far", (long)g_foreign_presents);
+        return g_present_orig(sc, sync, flags);
     }
 
     if ((g_frame++ % 120) == 0) {
@@ -37,6 +113,10 @@ static HRESULT STDMETHODCALLTYPE Hook_Present(IDXGISwapChain *sc, UINT sync, UIN
     /* SPIKE (2026-08-21, not yet reviewed): TEWVR_FRAMECAPTURE=1 back-buffer
      * capture-to-disk, file-triggered via capture.txt. See framecapture.h. */
     framecapture_on_present(g_frame);
+
+    /* 2026-10-06: OPENXR = 1 copies this frame to its eye's headset image and runs one headset frame, BEFORE the
+     * real Present (the back buffer still holds this frame). No-op when off. */
+    tew_xr_on_present(sc);
 
     /* 2026-10-06: alternate-frame stereo flips the eye here; the frame being presented keeps its eye. */
     {
@@ -153,6 +233,7 @@ void hooks_install(void) {
 
     g_hooks_active = 1;
     log_msg("hooks_install: Present hook active");
+    tew_xr_init();   /* OPENXR = 1 only: starts loading the headset runtime on its own thread */
 }
 
 void hooks_remove(void) {
@@ -164,6 +245,7 @@ void hooks_remove(void) {
      * Present hook itself failed to install. This must run BEFORE
      * cbdump_remove() so no Map/Unmap/UpdateSubresource trampoline can
      * still be live when cbdump tears down its own state. */
+    tew_xr_shutdown();
     mh_glue_shutdown();
     cbdump_remove();
     shaderdump_remove();

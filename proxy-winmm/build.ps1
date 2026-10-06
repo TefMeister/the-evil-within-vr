@@ -27,6 +27,11 @@ $incArgs = @()
 if (Test-Path $minhookInc) {
     $incArgs += "-I$minhookInc"
 }
+# OpenXR headers (Khronos, Apache-2.0 OR MIT), vendored; the loader DLL is loaded at run time, never linked.
+$openxrInc = "$PSScriptRoot\third_party\openxr\include"
+if (Test-Path $openxrInc) {
+    $incArgs += "-I$openxrInc"
+}
 
 $minhookFiles = @()
 if (Test-Path $minhookSrc) {

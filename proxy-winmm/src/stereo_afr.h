@@ -21,7 +21,7 @@
  * depth makes B the other sign) shows up as near things popping out the wrong way: flip STEREO_K's sign.
  *
  * Knobs (tewvr.ini, TEWVR_ prefix optional, read once): STEREO = 1 to turn it on; STEREO_K strength (default 0.02);
- * STEREO_C convergence (default 1.0). The test K (TEST_ROLL etc.) still applies on top: K_frame = K_eye * K_test.
+ * STEREO_C convergence (default 1.0); STEREO_UI_MONO (default 1) keeps flat 2D draws in one view (below). The test K (TEST_ROLL etc.) still applies on top: K_frame = K_eye * K_test.
  */
 
 /* Pure: the clip-space eye matrix above. eye_sign = -1 or +1. */
@@ -36,3 +36,16 @@ void stereo_afr_on_present(void);
 /* The K the patch should use right now: points at one of two prebuilt matrices, switched atomically, so a draw on
  * another thread never reads a half-written matrix. */
 const Mat4 *stereo_afr_current_k(void);
+
+/* The eye the frame now being drawn belongs to: 0 left, 1 right, or -1 when stereo is off (one view for both).
+ * Read on the render thread at Present, before stereo_afr_on_present() flips it (tew_xr.c). */
+int stereo_afr_current_eye(void);
+
+/* MENUS AND HUD STAY MONO (2026-10-06, reader). 2D draws carry an orthographic MVP whose last row is [0,0,0,1]
+ * (w = 1 for every vertex); world draws carry a perspective one whose last row has non-zero xyz (w = depth).
+ * Pure: 1 when mvp's row 3 is [0,0,0,w!=0] within STEREO_FLAT_EPS. */
+int stereo_mvp_is_flat(const Mat4 *mvp);
+
+/* The K for THIS draw: the eye K for a perspective MVP, the mono K (test K alone) for a flat one while
+ * STEREO_UI_MONO = 1. Same as stereo_afr_current_k() whenever stereo is off. */
+const Mat4 *stereo_afr_k_for(const Mat4 *mvp);
