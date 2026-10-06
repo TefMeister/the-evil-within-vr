@@ -1,0 +1,6 @@
+Frame-to-frame horizontal shift vs frame 0 (24 grabs, ~13 ms apart), STEREO_K=2.0 STEREO_C=0.98:
+near railing: 36 36 36 0 0 0 0 36 0 0 0 0 0 1 36 36 36 36 36 0 0 36 36
+far facade:   50 50 50 0 0 0 0 50 0 0 0 0 0 0 50 50 50 50 50 0 0 50 50
+[586911703][tid=22108] stereo_afr: ON - alternate frames, k=0.0500 c=1.0000; the eye flips at every Present
+[586914921][tid=20524] stereo_afr: 1 Present(s); next frame is the RIGHT eye
+[586934921][tid=20524] stereo_afr: 601 Present(s); next frame is the RIGHT eye
