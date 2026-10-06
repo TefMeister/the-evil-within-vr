@@ -1,0 +1,108 @@
+[593420140][tid=29092] head_track: ON - the head turns the picture (needs OPENXR = 1)
+[593509281][tid=28708] head_track: lens sx=1.1918 sy=2.1186 cx=0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 80.0 x 50.5 deg, picture aspect 1.778
+[593509281][tid=28708] head_track: 3 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593509296][tid=8908] tew_xr: head-tracked views: fov L-40.0 R40.0 U25.3 D-25.3 deg, picture 0,0 1280x720 of 1280x720
+[593510968][tid=28708] head_track: lens sx=1.1796 sy=2.0970 cx=0.0000 cy=0.0000 A=1.00000 (median of 13 draws) = 80.6 x 51.0 deg, picture aspect 1.778
+[593510968][tid=28708] head_track: 862 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511015][tid=28708] head_track: lens sx=1.1670 sy=2.0746 cx=-0.0000 cy=0.0000 A=1.00000 (median of 13 draws) = 81.2 x 51.5 deg, picture aspect 1.778
+[593511015][tid=28708] head_track: 1096 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511078][tid=28708] head_track: lens sx=1.1529 sy=2.0495 cx=-0.0000 cy=0.0000 A=1.00000 (median of 12 draws) = 81.9 x 52.0 deg, picture aspect 1.778
+[593511078][tid=28708] head_track: 1406 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511140][tid=28708] head_track: lens sx=1.1414 sy=2.0290 cx=0.0000 cy=0.0000 A=1.00000 (median of 8 draws) = 82.4 x 52.5 deg, picture aspect 1.778
+[593511140][tid=28708] head_track: 1637 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511187][tid=28708] head_track: lens sx=1.1287 sy=2.0065 cx=0.0000 cy=0.0000 A=1.00000 (median of 9 draws) = 83.1 x 53.0 deg, picture aspect 1.778
+[593511187][tid=28708] head_track: 1865 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511234][tid=28708] head_track: lens sx=1.1152 sy=1.9825 cx=-0.0000 cy=-0.0000 A=1.00000 (median of 7 draws) = 83.8 x 53.5 deg, picture aspect 1.778
+[593511234][tid=28708] head_track: 2313 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511281][tid=28708] head_track: lens sx=1.1008 sy=1.9569 cx=0.0000 cy=0.0000 A=1.00000 (median of 7 draws) = 84.5 x 54.1 deg, picture aspect 1.778
+[593511281][tid=28708] head_track: 2544 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511328][tid=28708] head_track: lens sx=1.0851 sy=1.9290 cx=0.0000 cy=0.0000 A=1.00000 (median of 11 draws) = 85.3 x 54.8 deg, picture aspect 1.778
+[593511328][tid=28708] head_track: 2769 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511375][tid=28708] head_track: lens sx=1.0744 sy=1.9099 cx=-0.0000 cy=0.0000 A=1.00000 (median of 9 draws) = 85.9 x 55.3 deg, picture aspect 1.778
+[593511375][tid=28708] head_track: 2919 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511406][tid=28708] head_track: lens sx=1.0633 sy=1.8903 cx=0.0000 cy=-0.0000 A=1.00000 (median of 13 draws) = 86.5 x 55.8 deg, picture aspect 1.778
+[593511406][tid=28708] head_track: 3308 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511437][tid=28708] head_track: lens sx=1.0520 sy=1.8701 cx=-0.0000 cy=0.0000 A=1.00000 (median of 10 draws) = 87.1 x 56.3 deg, picture aspect 1.778
+[593511437][tid=28708] head_track: 3520 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511468][tid=28708] head_track: lens sx=1.0404 sy=1.8495 cx=-0.0000 cy=0.0000 A=1.00000 (median of 17 draws) = 87.7 x 56.8 deg, picture aspect 1.778
+[593511468][tid=28708] head_track: 3671 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511500][tid=28708] head_track: lens sx=1.0285 sy=1.8284 cx=-0.0000 cy=0.0000 A=1.00000 (median of 18 draws) = 88.4 x 57.3 deg, picture aspect 1.778
+[593511500][tid=28708] head_track: 4164 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511531][tid=28708] head_track: lens sx=1.0165 sy=1.8071 cx=0.0000 cy=0.0000 A=1.00000 (median of 14 draws) = 89.1 x 57.9 deg, picture aspect 1.778
+[593511531][tid=28708] head_track: 4317 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511562][tid=28708] head_track: lens sx=1.0043 sy=1.7854 cx=-0.0000 cy=-0.0000 A=1.00000 (median of 13 draws) = 89.8 x 58.5 deg, picture aspect 1.778
+[593511562][tid=28708] head_track: 4469 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511593][tid=28708] head_track: lens sx=0.9920 sy=1.7634 cx=0.0000 cy=0.0000 A=1.00000 (median of 8 draws) = 90.5 x 59.1 deg, picture aspect 1.778
+[593511593][tid=28708] head_track: 4621 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511640][tid=28708] head_track: lens sx=0.9795 sy=1.7413 cx=0.0000 cy=0.0000 A=1.00000 (median of 5 draws) = 91.2 x 59.7 deg, picture aspect 1.778
+[593511640][tid=28708] head_track: 4773 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511671][tid=28708] head_track: lens sx=0.9670 sy=1.7190 cx=-0.0000 cy=-0.0000 A=1.00000 (median of 5 draws) = 91.9 x 60.4 deg, picture aspect 1.778
+[593511671][tid=28708] head_track: 5037 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511703][tid=28708] head_track: lens sx=0.9544 sy=1.6966 cx=0.0000 cy=-0.0000 A=1.00000 (median of 7 draws) = 92.7 x 61.0 deg, picture aspect 1.778
+[593511703][tid=28708] head_track: 5521 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511734][tid=28708] head_track: lens sx=0.9418 sy=1.6742 cx=0.0000 cy=0.0000 A=1.00000 (median of 8 draws) = 93.4 x 61.7 deg, picture aspect 1.778
+[593511734][tid=28708] head_track: 6669 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511781][tid=28708] head_track: lens sx=0.9292 sy=1.6518 cx=-0.0000 cy=0.0000 A=1.00000 (median of 17 draws) = 94.2 x 62.4 deg, picture aspect 1.778
+[593511781][tid=28708] head_track: 8098 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511812][tid=28708] head_track: lens sx=0.9154 sy=1.6274 cx=0.0000 cy=-0.0000 A=1.00000 (median of 32 draws) = 95.1 x 63.1 deg, picture aspect 1.778
+[593511812][tid=28708] head_track: 9008 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511843][tid=28708] head_track: lens sx=0.9014 sy=1.6025 cx=0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 95.9 x 63.9 deg, picture aspect 1.778
+[593511843][tid=28708] head_track: 9918 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511890][tid=28708] head_track: lens sx=0.8875 sy=1.5778 cx=0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 96.8 x 64.7 deg, picture aspect 1.778
+[593511890][tid=28708] head_track: 10828 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511921][tid=28708] head_track: lens sx=0.8738 sy=1.5533 cx=-0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 97.7 x 65.5 deg, picture aspect 1.778
+[593511921][tid=28708] head_track: 11738 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511953][tid=28708] head_track: lens sx=0.8610 sy=1.5306 cx=0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 98.5 x 66.3 deg, picture aspect 1.778
+[593511953][tid=28708] head_track: 12648 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593511984][tid=28708] head_track: lens sx=0.8491 sy=1.5095 cx=0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 99.3 x 67.0 deg, picture aspect 1.778
+[593511984][tid=28708] head_track: 13558 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593512015][tid=28708] head_track: lens sx=0.8375 sy=1.4887 cx=0.0000 cy=-0.0000 A=1.00000 (median of 32 draws) = 100.1 x 67.8 deg, picture aspect 1.778
+[593512015][tid=28708] head_track: 14468 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593512046][tid=28708] head_track: lens sx=0.8260 sy=1.4685 cx=0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 100.9 x 68.5 deg, picture aspect 1.778
+[593512046][tid=28708] head_track: 15378 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593512078][tid=28708] head_track: lens sx=0.8149 sy=1.4487 cx=0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 101.6 x 69.2 deg, picture aspect 1.778
+[593512078][tid=28708] head_track: 16288 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593512125][tid=28708] head_track: lens sx=0.8041 sy=1.4295 cx=-0.0000 cy=-0.0000 A=1.00000 (median of 32 draws) = 102.4 x 70.0 deg, picture aspect 1.778
+[593512125][tid=28708] head_track: 17568 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593512156][tid=28708] head_track: lens sx=0.7936 sy=1.4108 cx=0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 103.1 x 70.7 deg, picture aspect 1.778
+[593512156][tid=28708] head_track: 18518 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593512187][tid=28708] head_track: lens sx=0.7835 sy=1.3929 cx=0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 103.8 x 71.4 deg, picture aspect 1.778
+[593512187][tid=28708] head_track: 19390 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593512218][tid=28708] head_track: lens sx=0.7738 sy=1.3756 cx=0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 104.5 x 72.0 deg, picture aspect 1.778
+[593512218][tid=28708] head_track: 20262 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593512250][tid=28708] head_track: lens sx=0.7645 sy=1.3591 cx=-0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 105.2 x 72.7 deg, picture aspect 1.778
+[593512250][tid=28708] head_track: 21134 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593512281][tid=28708] head_track: lens sx=0.7557 sy=1.3434 cx=0.0000 cy=-0.0000 A=1.00000 (median of 32 draws) = 105.8 x 73.3 deg, picture aspect 1.778
+[593512281][tid=28708] head_track: 22006 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593512312][tid=28708] head_track: lens sx=0.7473 sy=1.3285 cx=0.0000 cy=-0.0000 A=1.00000 (median of 32 draws) = 106.5 x 73.9 deg, picture aspect 1.778
+[593512312][tid=28708] head_track: 22878 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593512343][tid=28708] head_track: lens sx=0.7395 sy=1.3146 cx=0.0000 cy=-0.0000 A=1.00000 (median of 32 draws) = 107.0 x 74.5 deg, picture aspect 1.778
+[593512343][tid=28708] head_track: 23750 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593512406][tid=28708] head_track: lens sx=0.7289 sy=1.2957 cx=0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 107.8 x 75.3 deg, picture aspect 1.778
+[593512406][tid=28708] head_track: 25058 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593512453][tid=28708] head_track: lens sx=0.7193 sy=1.2788 cx=0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 108.5 x 76.1 deg, picture aspect 1.778
+[593512453][tid=28708] head_track: 26366 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593512500][tid=28708] head_track: lens sx=0.7114 sy=1.2647 cx=0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 109.1 x 76.7 deg, picture aspect 1.778
+[593512500][tid=28708] head_track: 27674 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593512562][tid=28708] head_track: lens sx=0.7031 sy=1.2499 cx=-0.0000 cy=-0.0000 A=1.00000 (median of 32 draws) = 109.8 x 77.3 deg, picture aspect 1.778
+[593512562][tid=28708] head_track: 29418 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593512687][tid=28708] head_track: lens sx=0.6956 sy=1.2366 cx=-0.0000 cy=-0.0000 A=1.00000 (median of 32 draws) = 110.4 x 77.9 deg, picture aspect 1.778
+[593512687][tid=28708] head_track: 32470 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593540640][tid=28708] head_track: lens sx=1.7321 sy=3.0791 cx=0.0000 cy=-0.0000 A=1.00000 (median of 6 draws) = 60.0 x 36.0 deg, picture aspect 1.778
+[593540640][tid=28708] head_track: 357646 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593542812][tid=28708] head_track: lens sx=1.1918 sy=2.1186 cx=-0.0000 cy=-0.0000 A=1.00000 (median of 5 draws) = 80.0 x 50.5 deg, picture aspect 1.778
+[593542812][tid=28708] head_track: 357699 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593555140][tid=28708] head_track: lens sx=2.2822 sy=4.0571 cx=-0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 47.3 x 27.7 deg, picture aspect 1.778
+[593555140][tid=28708] head_track: 364220 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593558375][tid=28708] head_track: lens sx=3.1716 sy=5.6381 cx=-0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 35.0 x 20.1 deg, picture aspect 1.778
+[593558375][tid=28708] head_track: 372180 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593562546][tid=28708] head_track: lens sx=2.7475 sy=4.8842 cx=-0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 40.0 x 23.1 deg, picture aspect 1.778
+[593562546][tid=28708] head_track: 400715 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593566875][tid=28708] head_track: lens sx=2.4142 sy=4.2917 cx=0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 45.0 x 26.2 deg, picture aspect 1.778
+[593566875][tid=28708] head_track: 435325 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593570109][tid=28708] head_track: lens sx=2.7475 sy=4.8842 cx=0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 40.0 x 23.1 deg, picture aspect 1.778
+[593570109][tid=28708] head_track: 474815 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593573312][tid=28708] head_track: lens sx=2.4142 sy=4.2917 cx=0.0000 cy=-0.0000 A=1.00000 (median of 32 draws) = 45.0 x 26.2 deg, picture aspect 1.778
+[593573312][tid=28708] head_track: 498667 draw(s) from other cameras (shadow maps etc.) left alone so far
+[593576109][tid=28708] head_track: lens sx=1.7321 sy=3.0791 cx=-0.0000 cy=0.0000 A=1.00000 (median of 32 draws) = 60.0 x 36.0 deg, picture aspect 1.778
+[593576109][tid=28708] head_track: 530018 draw(s) from other cameras (shadow maps etc.) left alone so far

@@ -925,3 +925,21 @@ Full write-up: `modding-notes/2026-10-06-head-tracking-built.md`.
   through the keyed-mutex handoff), fov = the measured lens, picture rect = the letterbox implied by `sy/sx`.
 - Not run. Open: whether draws pass the 1e-3 checks live; viewport vs bars letterbox; big head turns show undrawn
   edges until the game's real camera is turned.
+
+### ✅ RUN 2026-10-06 (late night, `/lm`, dev PC, OpenXR simulator): HEAD TRACKING WORKS
+
+`2b2b71f5fd58`, `STEREO = 1`, `OPENXR = 1`, `HEADTRACK = 1`, Chapter 1 street, one launch.
+- **The lens measures cleanly** `[verified-live 2026-10-06, n=1 run]`: every frame settles from 32 sampled draws;
+  `cx = cy = 0`, `A = 1.00000` (infinite far plane), aspect **1.778** (so the letterbox is bars drawn over a full
+  16:9 picture, not a smaller viewport; the picture rect stays the whole buffer). Field of view follows the game
+  live: **60.0° × 36.0°** in play (`sx = 1.7321`), 80° at the title menu, 40°/45° in cutscene shots.
+- **Turning works on all three axes, both eyes** `[verified-live 2026-10-06, n=1 each]`: simulated head yaw 20°
+  right → the police car on the right comes to the centre; pitch 10° up → the whole asylum and the sky come into view,
+  Sebastian lower; roll 15° → the world tilts the expected way (right side lower). Each eye fills its view.
+- ⭐ **The game draws far beyond its own camera on this street**: at 60° right the full street wall is drawn, lit
+  and shadowed, no empty edge. id Tech 5's culling here is loose (area/portal based) `[inferred-static]`; tighter
+  interiors may still show edges. Big turns therefore work much better than feared.
+- Other cameras: ~530,000 draws by the end of the run were judged "another camera" (shadow cascades etc.) and left
+  alone; shadows did not swim in the captures `[verified-live 2026-10-06, n=1]`.
+- Evidence: `dev-archive/recon/2026-10-06-head-tracking-simulator/` (5 captures + log lines).
+- Installed now: same build, `STEREO = 0`, `OPENXR = 0`, `HEADTRACK = 0` (normal play).
