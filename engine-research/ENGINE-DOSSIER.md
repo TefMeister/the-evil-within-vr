@@ -908,3 +908,20 @@ Five launches, one reader building between them. Folded from inbox notes `2026-1
   NuGet 1.0.10.2, `7d0a7cbb3fd2`) beside `EvilWithin.exe`.
 - **Installed now (dev PC):** `winmm.dll` `c0342d5c2975` + loader, `STEREO = 0`, `OPENXR = 0` (normal play).
 - **Not yet:** head tracking (the camera does not follow the headset), projection layers, real headset.
+
+## 2026-10-06 (night, `/pd`, no launch): head tracking built — lens measured from the game's own draws
+
+Branch `stereo-6dof-core` `b4ab740`; `winmm.dll` `2b2b71f5fd58` installed on the dev PC with `HEADTRACK = 0`.
+Full write-up: `modding-notes/2026-10-06-head-tracking-built.md`.
+
+- **K_head = P·Rᵀ·P⁻¹ in clip space**, so `K_head·MVP = P·Rᵀ·V·M` for every draw. P is MEASURED per draw from the
+  MVP rows: `cx = r0·r3/|r3|²`, `sx = |r0 − cx·r3|/|r3|`, likewise y, `A = r2·r3/|r3|²`; model scale cancels, B
+  cancels for a rotation. Median of ~32 sampled draws per frame (`head_k.c`, `head_track.c`)
+  `[verified-numerically 2026-10-06, n=83,957 checks]`. Frame order: `K = K_eye · K_head · K_test`.
+- **This resolves §6's open "P from g_fov" item without reading g_fov** `[inferred-static 2026-10-06]`.
+- Other cameras: square lenses never sampled; with a lens settled, a draw whose `sy/sx` differs by >3% gets the mono
+  K (no head turn, no eye shift). Only while `HEADTRACK = 1`.
+- Headset side: per-eye projection views, orientation = the pose the frame was drawn with (carried with the picture
+  through the keyed-mutex handoff), fov = the measured lens, picture rect = the letterbox implied by `sy/sx`.
+- Not run. Open: whether draws pass the 1e-3 checks live; viewport vs bars letterbox; big head turns show undrawn
+  edges until the game's real camera is turned.
