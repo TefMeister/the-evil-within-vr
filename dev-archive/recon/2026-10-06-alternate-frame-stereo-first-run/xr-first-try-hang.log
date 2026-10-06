@@ -1,0 +1,92 @@
+[588001875][tid=28728] config: read D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini: 7 setting(s) taken
+[588001875][tid=28728] TEWVR winmm proxy attached (pid=4896)
+[588002203][tid=29540] minhook_glue: hook installed and enabled: ID3D11Device::CreateVertexShader
+[588002203][tid=29540] shaderdump: hooks create=1 set=0 di=0 d=0 dii=0 dinst=0 (shaderdump=off seqdump=off) -> stats inactive
+[588002281][tid=29540] minhook_glue: hook installed and enabled: mvp_patch ID3D11DeviceContext::DrawIndexed
+[588002359][tid=29540] minhook_glue: hook installed and enabled: mvp_patch ID3D11DeviceContext::Draw
+[588002406][tid=29540] minhook_glue: hook installed and enabled: mvp_patch ID3D11Device::CreateBuffer
+[588002453][tid=29540] minhook_glue: hook installed and enabled: mvp_patch ID3D11DeviceContext::Map
+[588002796][tid=29540] minhook_glue: hook installed and enabled: mvp_patch ID3D11DeviceContext::Unmap
+[588002859][tid=29540] mvp_patch: UpdateSubresource hooked at 00007FFC50099870 (target #0)
+[588002859][tid=29540] config: TEWVR_TEST_YAW=0 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[588002859][tid=29540] config: TEWVR_TEST_ROLL=0 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[588002859][tid=29540] mvp_patch: TEST_YAW/TEST_ROLL/TEST_SHIFT all unset/0 (neither the environment nor tewvr.ini set them) -> K = identity (read/patch/rebind mechanism still exercised every patchable draw; no visible change expected)
+[588002859][tid=29540] config: TEWVR_STEREO=1 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[588002859][tid=29540] config: TEWVR_STEREO_K=2.0 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[588002859][tid=29540] config: TEWVR_STEREO_C=0.98 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[588002859][tid=29540] stereo_afr: ON - alternate frames, k=2.0000 c=0.9800; the eye flips at every Present
+[588002859][tid=29540] mvp_patch: installed (DrawIndexed=1 Draw=1 UpdateSubresource=1; CreateBuffer=1, diagnostics only); world cb0 buffers (1856-1984 bytes, DEFAULT/no-CPU-access) are registered FROM THE DRAW PATH the first time one is seen bound at VS slot 0 for a draw with a usable mvpmatrix, and their content is shadowed on every UpdateSubresource; deferred contexts get their own UpdateSubresource late-hooked on their first draw; scratch pool created lazily on the first patchable draw
+[588002875][tid=29540] hooks_install: resolved IDXGISwapChain::Present at 00007FFC502418C0
+[588002937][tid=29540] minhook_glue: hook installed and enabled: Present
+[588002937][tid=29540] hooks_install: Present hook active
+[588002937][tid=29540] config: TEWVR_OPENXR=1 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[588002937][tid=29540] tew_xr: ON - loading the OpenXR runtime; eye output as a floating screen per eye
+[588002937][tid=4636] config: TEWVR_OPENXR_RUNTIME_JSON=D:\claude video game stuff\tools\OpenXR-Simulator\openxr_simulator.json (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[588002937][tid=4636] tew_xr: runtime for this game only: D:\claude video game stuff\tools\OpenXR-Simulator\openxr_simulator.json
+[588003078][tid=4636] tew_xr: runtime ready; the session starts at the next Present
+[588004171][tid=4276] mvptable: D3DReflect resolved from d3dcompiler_47.dll
+[588005015][tid=18300] mvp_patch: DIAG first pool-miss: a KNOWN/patchable shader's bound slot0 buf=000001DCBD8A72B8 is not (yet) in the world cb0 pool (pool currently holds 0 identities). That buffer's real desc: ByteWidth=64 Usage=2 BindFlags=0x4 CPUAccessFlags=0x10000 MiscFlags=0x0 - to be registered it must be CONSTANT_BUFFER, Usage=DEFAULT(0), CPUAccessFlags=0 and 1856-1984 bytes (checked from the draw path by mvp_try_register_bound_buffer, NOT at CreateBuffer time). A miss here is expected and harmless for the small per-shader cb0s (64/96/128/160/176/224/272B) this mechanism does not cover
+[588005046][tid=18300] d3d_capture: captured real swap-chain 1280x720 format=28 (dev=000001DCDCB00AF8 ctx=000001DCDC8DB680 sc=000001DCA37DDFC0)
+[588005046][tid=18300] d3d_capture: d3d_capture_ready() == true
+[588005046][tid=18300] Present hook alive: frame 1
+[588005046][tid=18300] tew_xr: session created on the game's own device (eye images stay on the card); waiting for the runtime to start it
+[588005078][tid=18300] tew_xr: session running
+[588005078][tid=18300] tew_xr: capturing 1280x720 eye images, format 28, kept on the graphics card
+[588005078][tid=18300] tew_xr: two 1280x720 eye swapchains, format 29
+[588005078][tid=18300] tew_xr: screen placed at head height 1.70 m
+[588005093][tid=18300] tew_xr: capturing 1728x824 eye images, format 28, kept on the graphics card
+[588005093][tid=18300] tew_xr: two 1728x824 eye swapchains, format 29
+[588005109][tid=18300] stereo_afr: 1 Present(s); next frame is the RIGHT eye
+[588005171][tid=18300] tew_xr: capturing 1280x720 eye images, format 28, kept on the graphics card
+[588005171][tid=18300] tew_xr: two 1280x720 eye swapchains, format 29
+[588005171][tid=18300] tew_xr: capturing 1728x824 eye images, format 28, kept on the graphics card
+[588005171][tid=18300] tew_xr: two 1728x824 eye swapchains, format 29
+[588005218][tid=18300] tew_xr: capturing 1280x720 eye images, format 28, kept on the graphics card
+[588005218][tid=18300] tew_xr: two 1280x720 eye swapchains, format 29
+[588005218][tid=18300] tew_xr: capturing 1728x824 eye images, format 28, kept on the graphics card
+[588005218][tid=18300] tew_xr: two 1728x824 eye swapchains, format 29
+[588005265][tid=18300] tew_xr: capturing 1280x720 eye images, format 28, kept on the graphics card
+[588005265][tid=18300] tew_xr: two 1280x720 eye swapchains, format 29
+[588005265][tid=18300] tew_xr: capturing 1728x824 eye images, format 28, kept on the graphics card
+[588005265][tid=18300] tew_xr: two 1728x824 eye swapchains, format 29
+[588005312][tid=18300] tew_xr: capturing 1280x720 eye images, format 28, kept on the graphics card
+[588005312][tid=18300] tew_xr: two 1280x720 eye swapchains, format 29
+[588005312][tid=18300] tew_xr: capturing 1728x824 eye images, format 28, kept on the graphics card
+[588005312][tid=4276] mvptable: no cb0 for hash=C1BD0EF24C067AE6 (D3DReflect failed, or this shader has none)
+[588005328][tid=18300] tew_xr: two 1728x824 eye swapchains, format 29
+[588005359][tid=4276] mvptable: no cb0 for hash=C989E1339BCD1117 (D3DReflect failed, or this shader has none)
+[588005359][tid=18300] tew_xr: capturing 1280x720 eye images, format 28, kept on the graphics card
+[588005359][tid=18300] tew_xr: two 1280x720 eye swapchains, format 29
+[588005359][tid=18300] tew_xr: capturing 1728x824 eye images, format 28, kept on the graphics card
+[588005359][tid=18300] tew_xr: two 1728x824 eye swapchains, format 29
+[588005421][tid=18300] mvptable: no cb0 for hash=529D6238D813A0A4 (D3DReflect failed, or this shader has none)
+[588005421][tid=18300] tew_xr: capturing 1280x720 eye images, format 28, kept on the graphics card
+[588005421][tid=18300] tew_xr: two 1280x720 eye swapchains, format 29
+[588005421][tid=18300] tew_xr: capturing 1728x824 eye images, format 28, kept on the graphics card
+[588005421][tid=18300] tew_xr: two 1728x824 eye swapchains, format 29
+[588005453][tid=4276] mvptable: no cb0 for hash=A0F020C66375C6B2 (D3DReflect failed, or this shader has none)
+[588005468][tid=18300] tew_xr: capturing 1280x720 eye images, format 28, kept on the graphics card
+[588005468][tid=18300] tew_xr: two 1280x720 eye swapchains, format 29
+[588005468][tid=18300] tew_xr: capturing 1728x824 eye images, format 28, kept on the graphics card
+[588005468][tid=18300] tew_xr: two 1728x824 eye swapchains, format 29
+[588005515][tid=18300] tew_xr: capturing 1280x720 eye images, format 28, kept on the graphics card
+[588005515][tid=18300] tew_xr: two 1280x720 eye swapchains, format 29
+[588005515][tid=18300] tew_xr: capturing 1728x824 eye images, format 28, kept on the graphics card
+[588005515][tid=18300] tew_xr: two 1728x824 eye swapchains, format 29
+[588005562][tid=18300] tew_xr: capturing 1280x720 eye images, format 28, kept on the graphics card
+[588005562][tid=18300] tew_xr: two 1280x720 eye swapchains, format 29
+[588005562][tid=18300] tew_xr: capturing 1728x824 eye images, format 28, kept on the graphics card
+[588005562][tid=18300] tew_xr: two 1728x824 eye swapchains, format 29
+[588005609][tid=4276] mvptable: no cb0 for hash=3C24370B7C65641F (D3DReflect failed, or this shader has none)
+[588005609][tid=18300] tew_xr: capturing 1280x720 eye images, format 28, kept on the graphics card
+[588005609][tid=18300] tew_xr: two 1280x720 eye swapchains, format 29
+[588005625][tid=18300] tew_xr: capturing 1728x824 eye images, format 28, kept on the graphics card
+[588005625][tid=18300] tew_xr: two 1728x824 eye swapchains, format 29
+[588005671][tid=18300] tew_xr: capturing 1280x720 eye images, format 28, kept on the graphics card
+[588005671][tid=18300] tew_xr: two 1280x720 eye swapchains, format 29
+[588005671][tid=18300] tew_xr: capturing 1728x824 eye images, format 28, kept on the graphics card
+[588005671][tid=18300] tew_xr: two 1728x824 eye swapchains, format 29
+[588005718][tid=18300] tew_xr: capturing 1280x720 eye images, format 28, kept on the graphics card
+[588005718][tid=18300] tew_xr: two 1280x720 eye swapchains, format 29
+[588005718][tid=18300] tew_xr: capturing 1728x824 eye images, format 28, kept on the graphics card
+[588005718][tid=18300] tew_xr: two 1728x824 eye swapchains, format 29

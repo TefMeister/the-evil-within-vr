@@ -1,0 +1,321 @@
+[589023515][tid=8844] config: read D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini: 7 setting(s) taken
+[589023515][tid=8844] TEWVR winmm proxy attached (pid=26712)
+[589023796][tid=9464] minhook_glue: hook installed and enabled: ID3D11Device::CreateVertexShader
+[589023812][tid=9464] shaderdump: hooks create=1 set=0 di=0 d=0 dii=0 dinst=0 (shaderdump=off seqdump=off) -> stats inactive
+[589023875][tid=9464] minhook_glue: hook installed and enabled: mvp_patch ID3D11DeviceContext::DrawIndexed
+[589024031][tid=9464] minhook_glue: hook installed and enabled: mvp_patch ID3D11DeviceContext::Draw
+[589024093][tid=9464] minhook_glue: hook installed and enabled: mvp_patch ID3D11Device::CreateBuffer
+[589024156][tid=9464] minhook_glue: hook installed and enabled: mvp_patch ID3D11DeviceContext::Map
+[589024203][tid=9464] minhook_glue: hook installed and enabled: mvp_patch ID3D11DeviceContext::Unmap
+[589024515][tid=9464] mvp_patch: UpdateSubresource hooked at 00007FFC50099870 (target #0)
+[589024515][tid=9464] config: TEWVR_TEST_YAW=0 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[589024515][tid=9464] config: TEWVR_TEST_ROLL=0 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[589024515][tid=9464] mvp_patch: TEST_YAW/TEST_ROLL/TEST_SHIFT all unset/0 (neither the environment nor tewvr.ini set them) -> K = identity (read/patch/rebind mechanism still exercised every patchable draw; no visible change expected)
+[589024515][tid=9464] config: TEWVR_STEREO=1 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[589024515][tid=9464] config: TEWVR_STEREO_K=2.0 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[589024515][tid=9464] config: TEWVR_STEREO_C=0.98 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[589024515][tid=9464] stereo_afr: ON - alternate frames, k=2.0000 c=0.9800, flat (menu/HUD) draws kept mono; the eye flips at every Present
+[589024515][tid=9464] mvp_patch: installed (DrawIndexed=1 Draw=1 UpdateSubresource=1; CreateBuffer=1, diagnostics only); world cb0 buffers (1856-1984 bytes, DEFAULT/no-CPU-access) are registered FROM THE DRAW PATH the first time one is seen bound at VS slot 0 for a draw with a usable mvpmatrix, and their content is shadowed on every UpdateSubresource; deferred contexts get their own UpdateSubresource late-hooked on their first draw; scratch pool created lazily on the first patchable draw
+[589024531][tid=9464] hooks_install: resolved IDXGISwapChain::Present at 00007FFC502418C0
+[589024578][tid=9464] minhook_glue: hook installed and enabled: Present
+[589024578][tid=9464] hooks_install: Present hook active
+[589024578][tid=9464] config: TEWVR_OPENXR=1 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[589024578][tid=9464] tew_xr: ON - headset thread started (own device); eye output as a floating screen per eye
+[589024578][tid=21184] config: TEWVR_OPENXR_RUNTIME_JSON=D:\claude video game stuff\tools\OpenXR-Simulator\openxr_simulator.json (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[589024578][tid=21184] tew_xr: runtime for this game only: D:\claude video game stuff\tools\OpenXR-Simulator\openxr_simulator.json
+[589024781][tid=21184] tew_xr: session created on the headset thread's own device; waiting for the runtime to start it
+[589024828][tid=21184] tew_xr: session running
+[589024875][tid=21184] d3d_capture: captured real swap-chain 1728x784 format=28 (dev=000001A999E137B8 ctx=000001A999BFC230 sc=000001A9A4DAD010)
+[589024875][tid=21184] d3d_capture: d3d_capture_ready() == true
+[589024875][tid=21184] hooks: game swap-chain 000001A9A4DAD010 draws to window 00000000021F0700, title "OpenXR Simulator (Mouse Look + WASD)", class "OpenXR Simulator"; only it runs per-frame work
+[589024875][tid=21184] Present hook alive: frame 1
+[589024875][tid=21184] tew_xr: sharing 1728x784 eye images (format 28) with the headset thread
+[589024890][tid=21184] stereo_afr: 1 Present(s); next frame is the RIGHT eye; 0 flat draw(s) kept mono since last line
+[589024890][tid=21184] tew_xr: two 1728x784 eye swapchains, format 29
+[589024890][tid=21184] tew_xr: screen placed at head height 1.70 m
+[589024906][tid=21184] mvptable: D3DReflect resolved from d3dcompiler_47.dll
+[589024906][tid=21184] mvptable: no cb0 for hash=6DB9B6D5041A2651 (D3DReflect failed, or this shader has none)
+[589024937][tid=21184] tew_xr: 1 headset frames submitted
+[589025187][tid=21184] mvptable: no cb0 for hash=529D6238D813A0A4 (D3DReflect failed, or this shader has none)
+[589026718][tid=24260] mvp_patch: DIAG first pool-miss: a KNOWN/patchable shader's bound slot0 buf=000001A9EE83ADB8 is not (yet) in the world cb0 pool (pool currently holds 0 identities). That buffer's real desc: ByteWidth=64 Usage=2 BindFlags=0x4 CPUAccessFlags=0x10000 MiscFlags=0x0 - to be registered it must be CONSTANT_BUFFER, Usage=DEFAULT(0), CPUAccessFlags=0 and 1856-1984 bytes (checked from the draw path by mvp_try_register_bound_buffer, NOT at CreateBuffer time). A miss here is expected and harmless for the small per-shader cb0s (64/96/128/160/176/224/272B) this mechanism does not cover
+[589026734][tid=24260] hooks: Present from a swap-chain that is not the game's (000001A9BD1E38C0, window 0000000000B40566, 1280x720) - passed straight through, no per-frame work (e.g. the OpenXR simulator's preview)
+[589026968][tid=21184] Present hook alive: frame 121
+[589026984][tid=28908] mvptable: no cb0 for hash=C1BD0EF24C067AE6 (D3DReflect failed, or this shader has none)
+[589027000][tid=28908] mvptable: no cb0 for hash=C989E1339BCD1117 (D3DReflect failed, or this shader has none)
+[589027078][tid=28908] mvptable: no cb0 for hash=A0F020C66375C6B2 (D3DReflect failed, or this shader has none)
+[589027187][tid=28908] mvptable: no cb0 for hash=3C24370B7C65641F (D3DReflect failed, or this shader has none)
+[589027968][tid=28908] mvptable: no cb0 for hash=9E0984DC44D6C261 (D3DReflect failed, or this shader has none)
+[589028265][tid=28908] mvptable: no cb0 for hash=84A15C5056FBD63F (D3DReflect failed, or this shader has none)
+[589028453][tid=28908] mvptable: no cb0 for hash=586E22D5F2C82124 (D3DReflect failed, or this shader has none)
+[589028593][tid=28908] mvptable: no cb0 for hash=3967EB68F8F0261F (D3DReflect failed, or this shader has none)
+[589028734][tid=28908] mvptable: no cb0 for hash=1C34F29230A2C64A (D3DReflect failed, or this shader has none)
+[589028828][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #0 (64 bytes, buf=000001A9EE83ADB8) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589028859][tid=24260] mvp_patch: scratch pool ready (64 buffers, 2048B each)
+[589028968][tid=21184] Present hook alive: frame 241
+[589029921][tid=21184] mvp_patch: DIAG last ~5000ms: patched=32 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=590 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=64 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589029921][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=1/64 buffers, shadow writes=32, draws patched via it=32, registered-but-unfed skips=0, map-table overflows=0
+[589029921][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=32, unmaps seen=32, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589030968][tid=21184] Present hook alive: frame 361
+[589032968][tid=21184] Present hook alive: frame 481
+[589034921][tid=21184] mvp_patch: DIAG last ~5000ms: patched=150 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=726 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589034921][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=1/64 buffers, shadow writes=182, draws patched via it=150, registered-but-unfed skips=0, map-table overflows=0
+[589034921][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=182, unmaps seen=182, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589034968][tid=21184] Present hook alive: frame 601
+[589034984][tid=21184] stereo_afr: 601 Present(s); next frame is the RIGHT eye; 184 flat draw(s) kept mono since last line
+[589036968][tid=21184] Present hook alive: frame 721
+[589038968][tid=21184] Present hook alive: frame 841
+[589039921][tid=21184] mvp_patch: DIAG last ~5000ms: patched=150 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=827 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589039921][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=1/64 buffers, shadow writes=332, draws patched via it=150, registered-but-unfed skips=0, map-table overflows=0
+[589039921][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=332, unmaps seen=332, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589040015][tid=21184] tew_xr: 901 headset frames submitted
+[589040968][tid=21184] Present hook alive: frame 961
+[589042968][tid=21184] Present hook alive: frame 1081
+[589044921][tid=21184] mvp_patch: DIAG last ~5000ms: patched=150 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=600 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589044921][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=1/64 buffers, shadow writes=482, draws patched via it=150, registered-but-unfed skips=0, map-table overflows=0
+[589044921][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=482, unmaps seen=482, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589044968][tid=21184] Present hook alive: frame 1201
+[589044984][tid=21184] stereo_afr: 1201 Present(s); next frame is the RIGHT eye; 300 flat draw(s) kept mono since last line
+[589046718][tid=24260] hooks: 600 non-game Present(s) passed through so far
+[589046968][tid=21184] Present hook alive: frame 1321
+[589048968][tid=21184] Present hook alive: frame 1441
+[589049921][tid=21184] mvp_patch: DIAG last ~5000ms: patched=150 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=600 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589049921][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=1/64 buffers, shadow writes=632, draws patched via it=150, registered-but-unfed skips=0, map-table overflows=0
+[589049921][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=632, unmaps seen=632, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589050968][tid=21184] Present hook alive: frame 1561
+[589052968][tid=21184] Present hook alive: frame 1681
+[589054765][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #1 (64 bytes, buf=000001AA1640A038) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589054921][tid=24260] mvp_patch: DIAG last ~5000ms: patched=184 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=624 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=76 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589054921][tid=24260] mvp_patch: DIAG dynamic cb0 path: pool=2/64 buffers, shadow writes=816, draws patched via it=184, registered-but-unfed skips=0, map-table overflows=0
+[589054921][tid=24260] mvp_patch: DIAG dynamic cb0 pairing: maps seen=816, unmaps seen=816, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589054968][tid=21184] Present hook alive: frame 1801
+[589054984][tid=21184] stereo_afr: 1801 Present(s); next frame is the RIGHT eye; 372 flat draw(s) kept mono since last line
+[589055015][tid=21184] tew_xr: 1801 headset frames submitted
+[589056875][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #2 (64 bytes, buf=000001AA1640E738) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589057015][tid=21184] Present hook alive: frame 1921
+[589057406][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #3 (64 bytes, buf=000001AA191AB078) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589058484][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #4 (64 bytes, buf=000001AA1B946F78) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589059015][tid=21184] Present hook alive: frame 2041
+[589059921][tid=21184] mvp_patch: DIAG last ~5000ms: patched=2790 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=1049 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=180 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589059921][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=5/64 buffers, shadow writes=3455, draws patched via it=2790, registered-but-unfed skips=0, map-table overflows=0
+[589059921][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=3455, unmaps seen=3455, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589061015][tid=21184] Present hook alive: frame 2161
+[589061765][tid=24260] hooks: 1200 non-game Present(s) passed through so far
+[589063015][tid=21184] Present hook alive: frame 2281
+[589064921][tid=21184] mvp_patch: DIAG last ~5000ms: patched=2534 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=1200 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589064921][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=5/64 buffers, shadow writes=5839, draws patched via it=2534, registered-but-unfed skips=0, map-table overflows=0
+[589064921][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=5839, unmaps seen=5839, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589065015][tid=21184] Present hook alive: frame 2401
+[589065031][tid=21184] stereo_afr: 2401 Present(s); next frame is the RIGHT eye; 5314 flat draw(s) kept mono since last line
+[589067015][tid=21184] Present hook alive: frame 2521
+[589069015][tid=21184] Present hook alive: frame 2641
+[589069921][tid=21184] mvp_patch: DIAG last ~5000ms: patched=1480 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=1192 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589069921][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=5/64 buffers, shadow writes=7319, draws patched via it=1480, registered-but-unfed skips=0, map-table overflows=0
+[589069921][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=7319, unmaps seen=7319, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589070062][tid=21184] tew_xr: 2701 headset frames submitted
+[589071015][tid=21184] Present hook alive: frame 2761
+[589071828][tid=24260] hooks: 1800 non-game Present(s) passed through so far
+[589073015][tid=21184] Present hook alive: frame 2881
+[589074921][tid=21184] mvp_patch: DIAG last ~5000ms: patched=1500 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=1200 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589074921][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=5/64 buffers, shadow writes=8819, draws patched via it=1500, registered-but-unfed skips=0, map-table overflows=0
+[589074921][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=8819, unmaps seen=8819, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589075015][tid=21184] Present hook alive: frame 3001
+[589075031][tid=21184] stereo_afr: 3001 Present(s); next frame is the RIGHT eye; 2980 flat draw(s) kept mono since last line
+[589077015][tid=21184] Present hook alive: frame 3121
+[589079015][tid=21184] Present hook alive: frame 3241
+[589079921][tid=21184] mvp_patch: DIAG last ~5000ms: patched=1500 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=1200 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589079921][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=5/64 buffers, shadow writes=10319, draws patched via it=1500, registered-but-unfed skips=0, map-table overflows=0
+[589079921][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=10319, unmaps seen=10319, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589081015][tid=21184] Present hook alive: frame 3361
+[589081828][tid=24260] hooks: 2400 non-game Present(s) passed through so far
+[589083015][tid=21184] Present hook alive: frame 3481
+[589084921][tid=21184] mvp_patch: DIAG last ~5000ms: patched=1500 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=1200 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589084921][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=5/64 buffers, shadow writes=11819, draws patched via it=1500, registered-but-unfed skips=0, map-table overflows=0
+[589084921][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=11819, unmaps seen=11819, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589085015][tid=21184] Present hook alive: frame 3601
+[589085031][tid=21184] stereo_afr: 3601 Present(s); next frame is the RIGHT eye; 3000 flat draw(s) kept mono since last line
+[589085062][tid=21184] tew_xr: 3601 headset frames submitted
+[589087015][tid=21184] Present hook alive: frame 3721
+[589089015][tid=21184] Present hook alive: frame 3841
+[589089921][tid=21184] mvp_patch: DIAG last ~5000ms: patched=1500 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=1200 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589089921][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=5/64 buffers, shadow writes=13319, draws patched via it=1500, registered-but-unfed skips=0, map-table overflows=0
+[589089921][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=13319, unmaps seen=13319, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589091015][tid=21184] Present hook alive: frame 3961
+[589091828][tid=24260] hooks: 3000 non-game Present(s) passed through so far
+[589093015][tid=21184] Present hook alive: frame 4081
+[589094921][tid=21184] mvp_patch: DIAG last ~5000ms: patched=1500 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=1200 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589094921][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=5/64 buffers, shadow writes=14819, draws patched via it=1500, registered-but-unfed skips=0, map-table overflows=0
+[589094921][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=14819, unmaps seen=14819, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589095015][tid=21184] Present hook alive: frame 4201
+[589095031][tid=21184] stereo_afr: 4201 Present(s); next frame is the RIGHT eye; 3000 flat draw(s) kept mono since last line
+[589097015][tid=21184] Present hook alive: frame 4321
+[589099015][tid=21184] Present hook alive: frame 4441
+[589099921][tid=21184] mvp_patch: DIAG last ~5000ms: patched=1500 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=1200 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589099921][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=5/64 buffers, shadow writes=16319, draws patched via it=1500, registered-but-unfed skips=0, map-table overflows=0
+[589099921][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=16319, unmaps seen=16319, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589100062][tid=21184] tew_xr: 4501 headset frames submitted
+[589101015][tid=21184] Present hook alive: frame 4561
+[589102812][tid=24260] hooks: 3600 non-game Present(s) passed through so far
+[589103015][tid=21184] Present hook alive: frame 4681
+[589104937][tid=24260] mvp_patch: DIAG last ~5000ms: patched=905 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=962 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589104937][tid=24260] mvp_patch: DIAG dynamic cb0 path: pool=5/64 buffers, shadow writes=17224, draws patched via it=905, registered-but-unfed skips=0, map-table overflows=0
+[589104937][tid=24260] mvp_patch: DIAG dynamic cb0 pairing: maps seen=17224, unmaps seen=17224, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589105015][tid=21184] Present hook alive: frame 4801
+[589105031][tid=21184] stereo_afr: 4801 Present(s); next frame is the RIGHT eye; 2390 flat draw(s) kept mono since last line
+[589107015][tid=21184] Present hook alive: frame 4921
+[589109015][tid=21184] Present hook alive: frame 5041
+[589109937][tid=24260] mvp_patch: DIAG last ~5000ms: patched=785 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=914 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589109937][tid=24260] mvp_patch: DIAG dynamic cb0 path: pool=5/64 buffers, shadow writes=18009, draws patched via it=785, registered-but-unfed skips=0, map-table overflows=0
+[589109937][tid=24260] mvp_patch: DIAG dynamic cb0 pairing: maps seen=18009, unmaps seen=18009, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589111015][tid=21184] Present hook alive: frame 5161
+[589113015][tid=21184] Present hook alive: frame 5281
+[589113578][tid=29024] mvp_patch: UpdateSubresource hooked at 00007FFC50117C20 (target #1)
+[589113578][tid=18376] mvp_patch: STEP0 - registered world cb0 buffer #0 (1920 bytes, buf=000001A9BD6823B8); its content is shadowed on every UpdateSubresource, so its draws are patchable with no per-frame GPU work
+[589113578][tid=3356] mvp_patch: STEP0 - registered world cb0 buffer #1 (1920 bytes, buf=000001A9BD5F6338); its content is shadowed on every UpdateSubresource, so its draws are patchable with no per-frame GPU work
+[589113578][tid=3440] mvp_patch: STEP0 - registered world cb0 buffer #2 (1920 bytes, buf=000001A9BD683DF8); its content is shadowed on every UpdateSubresource, so its draws are patchable with no per-frame GPU work
+[589113578][tid=13968] mvp_patch: STEP0 - registered world cb0 buffer #3 (1920 bytes, buf=000001A9BD6813F8); its content is shadowed on every UpdateSubresource, so its draws are patchable with no per-frame GPU work
+[589113578][tid=18376] mvp_patch: WARNING - world cb0 shadow slot 1 was written by thread 18376 after thread 3356. The unsynchronised single-writer precondition documented at g_shadow is BROKEN: a draw can now read a torn or foreign MVP and APPLY it. This shadow needs real synchronisation (seqlock or per-context shadows) before the patched output can be trusted.
+[589113578][tid=24260] mvp_patch: STEP0 - registered world cb0 buffer #4 (1920 bytes, buf=000001A9BD681BF8); its content is shadowed on every UpdateSubresource, so its draws are patchable with no per-frame GPU work
+[589113609][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #5 (96 bytes, buf=000001AA1801D638) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589114937][tid=24260] mvp_patch: DIAG last ~5000ms: patched=2811 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=1053 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=425 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589114937][tid=24260] mvp_patch: DIAG dynamic cb0 path: pool=6/64 buffers, shadow writes=18972, draws patched via it=967, registered-but-unfed skips=0, map-table overflows=0
+[589114937][tid=24260] mvp_patch: DIAG dynamic cb0 pairing: maps seen=18972, unmaps seen=18972, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589114937][tid=24260] mvp_patch: DIAG shadow concurrency (cumulative): cross-thread writes=702, CONCURRENT writes=0, draws skipped for a torn shadow=0  (cross-thread only, no concurrency observed - the expected state)
+[589115000][tid=21184] tew_xr: 5401 headset frames submitted
+[589115015][tid=21184] Present hook alive: frame 5401
+[589115031][tid=21184] stereo_afr: 5401 Present(s); next frame is the RIGHT eye; 1650 flat draw(s) kept mono since last line
+[589115187][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #6 (128 bytes, buf=000001AA19E0C678) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589115359][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #7 (128 bytes, buf=000001AA1800C7B8) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589115437][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #8 (304 bytes, buf=000001AA19DFD238) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589115562][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #9 (272 bytes, buf=000001AA19E10578) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589115734][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #10 (64 bytes, buf=000001AA179649B8) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589115890][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #11 (224 bytes, buf=000001AA19E0D638) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589116062][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #12 (160 bytes, buf=000001AA19E131F8) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589116265][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #13 (96 bytes, buf=000001AA1801E878) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589116406][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #14 (224 bytes, buf=000001AA1640F438) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589116531][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #15 (128 bytes, buf=000001AA19E05D78) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589116703][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #16 (64 bytes, buf=000001AA179602B8) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589116968][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #17 (64 bytes, buf=000001AA1795F838) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589117015][tid=21184] Present hook alive: frame 5521
+[589117328][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #18 (64 bytes, buf=000001AA179663F8) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589118296][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #19 (64 bytes, buf=000001A9EE83B038) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589119015][tid=21184] Present hook alive: frame 5641
+[589119781][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #20 (64 bytes, buf=000001AA191A6478) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589119937][tid=21184] mvp_patch: DIAG last ~5000ms: patched=152263 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=9352 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=928 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589119937][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=21/64 buffers, shadow writes=39660, draws patched via it=20772, registered-but-unfed skips=0, map-table overflows=0
+[589119937][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=39660, unmaps seen=39660, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589119937][tid=21184] mvp_patch: DIAG shadow concurrency (cumulative): cross-thread writes=74105, CONCURRENT writes=0, draws skipped for a torn shadow=0  (cross-thread only, no concurrency observed - the expected state)
+[589120546][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #21 (128 bytes, buf=000001AA19E00178) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589121015][tid=21184] Present hook alive: frame 5761
+[589122359][tid=24260] hooks: 4200 non-game Present(s) passed through so far
+[589122640][tid=24260] mvp_patch: registered DYNAMIC cb0 buffer #22 (64 bytes, buf=000001AA191AB338) - its Map/Unmap writes are now shadowed, so its draws become patchable from the next write on
+[589123015][tid=21184] Present hook alive: frame 5881
+[589124937][tid=18376] mvp_patch: DIAG last ~5000ms: patched=189736 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=10066 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=119 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589124937][tid=18376] mvp_patch: DIAG dynamic cb0 path: pool=23/64 buffers, shadow writes=64882, draws patched via it=26128, registered-but-unfed skips=0, map-table overflows=0
+[589124937][tid=18376] mvp_patch: DIAG dynamic cb0 pairing: maps seen=64882, unmaps seen=64882, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589124937][tid=18376] mvp_patch: DIAG CreateBuffer coverage: total_calls_seen=2045 of which constant_buffers=1320 (recorded identities=1320, cap 2048); world cb0 pool holds 5; UpdateSubresource targets hooked=2, shadow writes=201055 (partial-box=0), draws skipped for an empty shadow=9, cross-thread shadow writes=166502, CONCURRENT shadow writes=0, draws skipped for a torn shadow=0, late-hooks after a shadow was already valid=0
+[589124937][tid=18376] mvp_patch: DIAG miss-combo[0]: ByteWidth=64 Usage=2 BindFlags=0x4 CPUAccess=0x10000 | sampled misses: created-through-our-hook=4 NEVER-seen-by-our-hook=0
+[589124937][tid=18376] mvp_patch: DIAG miss-combo[0] draws: sampled=4 geom(count>=300)=0 tiny(count<=6)=2 non-indexed=0 max_count=36 | vertex shaders: DD0AE50A24B07A1A x1 546A295A7B366438 x3
+[589124937][tid=18376] mvp_patch: DIAG miss-combo[1]: ByteWidth=1920 Usage=0 BindFlags=0x4 CPUAccess=0x0 | sampled misses: created-through-our-hook=1 NEVER-seen-by-our-hook=0
+[589124937][tid=18376] mvp_patch: DIAG miss-combo[1] draws: sampled=1 geom(count>=300)=1 tiny(count<=6)=0 non-indexed=0 max_count=477 | vertex shaders: 2005A744274207BE x1
+[589124937][tid=18376] mvp_patch: DIAG miss-combo[2]: ByteWidth=128 Usage=2 BindFlags=0x4 CPUAccess=0x10000 | sampled misses: created-through-our-hook=1 NEVER-seen-by-our-hook=0
+[589124937][tid=18376] mvp_patch: DIAG miss-combo[2] draws: sampled=1 geom(count>=300)=0 tiny(count<=6)=0 non-indexed=0 max_count=60 | vertex shaders: CEE6DBC3D500496C x1
+[589124937][tid=18376] mvp_patch: DIAG miss-combo[3]: ByteWidth=224 Usage=2 BindFlags=0x4 CPUAccess=0x10000 | sampled misses: created-through-our-hook=1 NEVER-seen-by-our-hook=0
+[589124937][tid=18376] mvp_patch: DIAG miss-combo[3] draws: sampled=1 geom(count>=300)=1 tiny(count<=6)=0 non-indexed=0 max_count=3252 | vertex shaders: CB5FF43773907023 x1
+[589124937][tid=18376] mvp_patch: DIAG shadow concurrency (cumulative): cross-thread writes=166547, CONCURRENT writes=0, draws skipped for a torn shadow=0  (cross-thread only, no concurrency observed - the expected state)
+[589125015][tid=21184] Present hook alive: frame 6001
+[589125031][tid=21184] stereo_afr: 6001 Present(s); next frame is the RIGHT eye; 4914 flat draw(s) kept mono since last line
+[589127015][tid=21184] Present hook alive: frame 6121
+[589129015][tid=21184] Present hook alive: frame 6241
+[589129937][tid=13968] mvp_patch: DIAG last ~5000ms: patched=186651 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=9962 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589129937][tid=13968] mvp_patch: DIAG dynamic cb0 path: pool=23/64 buffers, shadow writes=87277, draws patched via it=23301, registered-but-unfed skips=0, map-table overflows=0
+[589129937][tid=13968] mvp_patch: DIAG dynamic cb0 pairing: maps seen=87277, unmaps seen=87277, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589129937][tid=13968] mvp_patch: DIAG shadow concurrency (cumulative): cross-thread writes=259912, CONCURRENT writes=0, draws skipped for a torn shadow=0  (cross-thread only, no concurrency observed - the expected state)
+[589130000][tid=21184] tew_xr: 6301 headset frames submitted
+[589131031][tid=21184] Present hook alive: frame 6361
+[589133031][tid=21184] Present hook alive: frame 6481
+[589134937][tid=21184] mvp_patch: DIAG last ~5000ms: patched=340149 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=17586 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589134937][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=23/64 buffers, shadow writes=128114, draws patched via it=42481, registered-but-unfed skips=0, map-table overflows=0
+[589134937][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=128114, unmaps seen=128114, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589134937][tid=21184] mvp_patch: DIAG shadow concurrency (cumulative): cross-thread writes=432187, CONCURRENT writes=0, draws skipped for a torn shadow=0  (cross-thread only, no concurrency observed - the expected state)
+[589135031][tid=21184] Present hook alive: frame 6601
+[589135046][tid=21184] stereo_afr: 6601 Present(s); next frame is the RIGHT eye; 11583 flat draw(s) kept mono since last line
+[589136546][tid=24260] hooks: 4800 non-game Present(s) passed through so far
+[589137031][tid=21184] Present hook alive: frame 6721
+[589139031][tid=21184] Present hook alive: frame 6841
+[589139937][tid=21184] mvp_patch: DIAG last ~5000ms: patched=372916 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=19200 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589139937][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=23/64 buffers, shadow writes=172814, draws patched via it=46500, registered-but-unfed skips=0, map-table overflows=0
+[589139937][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=172814, unmaps seen=172814, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589139937][tid=21184] mvp_patch: DIAG shadow concurrency (cumulative): cross-thread writes=617315, CONCURRENT writes=0, draws skipped for a torn shadow=0  (cross-thread only, no concurrency observed - the expected state)
+[589141031][tid=21184] Present hook alive: frame 6961
+[589143031][tid=21184] Present hook alive: frame 7081
+[589144937][tid=21184] mvp_patch: DIAG last ~5000ms: patched=373050 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=19200 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589144937][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=23/64 buffers, shadow writes=217514, draws patched via it=46500, registered-but-unfed skips=0, map-table overflows=0
+[589144937][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=217514, unmaps seen=217514, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589144937][tid=21184] mvp_patch: DIAG shadow concurrency (cumulative): cross-thread writes=803402, CONCURRENT writes=0, draws skipped for a torn shadow=0  (cross-thread only, no concurrency observed - the expected state)
+[589145015][tid=21184] tew_xr: 7201 headset frames submitted
+[589145031][tid=21184] Present hook alive: frame 7201
+[589145046][tid=21184] stereo_afr: 7201 Present(s); next frame is the RIGHT eye; 16200 flat draw(s) kept mono since last line
+[589146578][tid=24260] hooks: 5400 non-game Present(s) passed through so far
+[589147031][tid=21184] Present hook alive: frame 7321
+[589149031][tid=21184] Present hook alive: frame 7441
+[589149937][tid=24260] mvp_patch: DIAG last ~5000ms: patched=359958 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=18551 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589149937][tid=24260] mvp_patch: DIAG dynamic cb0 path: pool=23/64 buffers, shadow writes=260730, draws patched via it=44949, registered-but-unfed skips=0, map-table overflows=0
+[589149937][tid=24260] mvp_patch: DIAG dynamic cb0 pairing: maps seen=260730, unmaps seen=260730, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589149937][tid=24260] mvp_patch: DIAG shadow concurrency (cumulative): cross-thread writes=983299, CONCURRENT writes=0, draws skipped for a torn shadow=0  (cross-thread only, no concurrency observed - the expected state)
+[589151046][tid=21184] Present hook alive: frame 7561
+[589153046][tid=21184] Present hook alive: frame 7681
+[589154937][tid=3356] mvp_patch: DIAG last ~5000ms: patched=193980 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=10292 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589154937][tid=3356] mvp_patch: DIAG dynamic cb0 path: pool=23/64 buffers, shadow writes=284015, draws patched via it=24228, registered-but-unfed skips=0, map-table overflows=0
+[589154937][tid=3356] mvp_patch: DIAG dynamic cb0 pairing: maps seen=284015, unmaps seen=284015, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589154937][tid=3356] mvp_patch: DIAG shadow concurrency (cumulative): cross-thread writes=1078384, CONCURRENT writes=0, draws skipped for a torn shadow=0  (cross-thread only, no concurrency observed - the expected state)
+[589155046][tid=21184] Present hook alive: frame 7801
+[589155062][tid=21184] stereo_afr: 7801 Present(s); next frame is the RIGHT eye; 11961 flat draw(s) kept mono since last line
+[589157046][tid=21184] Present hook alive: frame 7921
+[589159046][tid=21184] Present hook alive: frame 8041
+[589159937][tid=3440] mvp_patch: DIAG last ~5000ms: patched=219376 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=11521 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589159937][tid=3440] mvp_patch: DIAG dynamic cb0 path: pool=23/64 buffers, shadow writes=310227, draws patched via it=27268, registered-but-unfed skips=0, map-table overflows=0
+[589159937][tid=3440] mvp_patch: DIAG dynamic cb0 pairing: maps seen=310227, unmaps seen=310227, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589159937][tid=3440] mvp_patch: DIAG shadow concurrency (cumulative): cross-thread writes=1187766, CONCURRENT writes=0, draws skipped for a torn shadow=0  (cross-thread only, no concurrency observed - the expected state)
+[589159953][tid=21184] tew_xr: 8101 headset frames submitted
+[589161062][tid=21184] Present hook alive: frame 8161
+[589161609][tid=24260] hooks: 6000 non-game Present(s) passed through so far
+[589163046][tid=21184] Present hook alive: frame 8281
+[589164937][tid=21184] mvp_patch: DIAG last ~5000ms: patched=339671 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=17586 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589164937][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=23/64 buffers, shadow writes=350807, draws patched via it=42224, registered-but-unfed skips=0, map-table overflows=0
+[589164937][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=350807, unmaps seen=350807, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589164937][tid=21184] mvp_patch: DIAG shadow concurrency (cumulative): cross-thread writes=1356551, CONCURRENT writes=0, draws skipped for a torn shadow=0  (cross-thread only, no concurrency observed - the expected state)
+[589165046][tid=21184] Present hook alive: frame 8401
+[589165062][tid=21184] stereo_afr: 8401 Present(s); next frame is the RIGHT eye; 12059 flat draw(s) kept mono since last line
+[589167046][tid=21184] Present hook alive: frame 8521
+[589169046][tid=21184] Present hook alive: frame 8641
+[589169937][tid=21184] mvp_patch: DIAG last ~5000ms: patched=372790 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=19200 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589169937][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=23/64 buffers, shadow writes=394963, draws patched via it=45956, registered-but-unfed skips=0, map-table overflows=0
+[589169937][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=394963, unmaps seen=394963, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589169937][tid=21184] mvp_patch: DIAG shadow concurrency (cumulative): cross-thread writes=1541400, CONCURRENT writes=0, draws skipped for a torn shadow=0  (cross-thread only, no concurrency observed - the expected state)
+[589171046][tid=21184] Present hook alive: frame 8761
+[589171609][tid=24260] hooks: 6600 non-game Present(s) passed through so far
+[589173046][tid=21184] Present hook alive: frame 8881
+[589174921][tid=21184] tew_xr: 9001 headset frames submitted
+[589174937][tid=21184] mvp_patch: DIAG last ~5000ms: patched=372806 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=19200 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589174937][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=23/64 buffers, shadow writes=439077, draws patched via it=45914, registered-but-unfed skips=0, map-table overflows=0
+[589174937][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=439077, unmaps seen=439077, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589174937][tid=21184] mvp_patch: DIAG shadow concurrency (cumulative): cross-thread writes=1725986, CONCURRENT writes=0, draws skipped for a torn shadow=0  (cross-thread only, no concurrency observed - the expected state)
+[589175046][tid=21184] Present hook alive: frame 9001
+[589175062][tid=21184] stereo_afr: 9001 Present(s); next frame is the RIGHT eye; 15600 flat draw(s) kept mono since last line
+[589177046][tid=21184] Present hook alive: frame 9121
+[589179046][tid=21184] Present hook alive: frame 9241
+[589179937][tid=21184] mvp_patch: DIAG last ~5000ms: patched=372750 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=19200 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589179937][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=23/64 buffers, shadow writes=483177, draws patched via it=45900, registered-but-unfed skips=0, map-table overflows=0
+[589179937][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=483177, unmaps seen=483177, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589179937][tid=21184] mvp_patch: DIAG shadow concurrency (cumulative): cross-thread writes=1914359, CONCURRENT writes=0, draws skipped for a torn shadow=0  (cross-thread only, no concurrency observed - the expected state)
+[589181046][tid=21184] Present hook alive: frame 9361
+[589181671][tid=24260] hooks: 7200 non-game Present(s) passed through so far
+[589183046][tid=21184] Present hook alive: frame 9481
+[589184937][tid=21184] mvp_patch: DIAG last ~5000ms: patched=366803 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=19014 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=0 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[589184937][tid=21184] mvp_patch: DIAG dynamic cb0 path: pool=23/64 buffers, shadow writes=525361, draws patched via it=43306, registered-but-unfed skips=0, map-table overflows=0
+[589184937][tid=21184] mvp_patch: DIAG dynamic cb0 pairing: maps seen=525361, unmaps seen=525361, unmaps with no recorded map=0 (all cumulative; overflows above should stay 0 now the table is keyed on (context,resource))
+[589184937][tid=21184] mvp_patch: DIAG shadow concurrency (cumulative): cross-thread writes=2098516, CONCURRENT writes=0, draws skipped for a torn shadow=0  (cross-thread only, no concurrency observed - the expected state)
+[589185046][tid=21184] Present hook alive: frame 9601
+[589185062][tid=21184] stereo_afr: 9601 Present(s); next frame is the RIGHT eye; 13252 flat draw(s) kept mono since last line
+[589187046][tid=21184] Present hook alive: frame 9721
+[589189046][tid=21184] Present hook alive: frame 9841

@@ -1,0 +1,53 @@
+[588513578][tid=28788] config: read D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini: 7 setting(s) taken
+[588513578][tid=28788] TEWVR winmm proxy attached (pid=22800)
+[588514265][tid=26144] minhook_glue: hook installed and enabled: ID3D11Device::CreateVertexShader
+[588514296][tid=26144] shaderdump: hooks create=1 set=0 di=0 d=0 dii=0 dinst=0 (shaderdump=off seqdump=off) -> stats inactive
+[588514359][tid=26144] minhook_glue: hook installed and enabled: mvp_patch ID3D11DeviceContext::DrawIndexed
+[588514515][tid=26144] minhook_glue: hook installed and enabled: mvp_patch ID3D11DeviceContext::Draw
+[588514625][tid=26144] minhook_glue: hook installed and enabled: mvp_patch ID3D11Device::CreateBuffer
+[588515000][tid=26144] minhook_glue: hook installed and enabled: mvp_patch ID3D11DeviceContext::Map
+[588515093][tid=26144] minhook_glue: hook installed and enabled: mvp_patch ID3D11DeviceContext::Unmap
+[588515234][tid=26144] mvp_patch: UpdateSubresource hooked at 00007FFC50099870 (target #0)
+[588515250][tid=26144] config: TEWVR_TEST_YAW=0 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[588515250][tid=26144] config: TEWVR_TEST_ROLL=0 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[588515250][tid=26144] mvp_patch: TEST_YAW/TEST_ROLL/TEST_SHIFT all unset/0 (neither the environment nor tewvr.ini set them) -> K = identity (read/patch/rebind mechanism still exercised every patchable draw; no visible change expected)
+[588515250][tid=26144] config: TEWVR_STEREO=1 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[588515250][tid=26144] config: TEWVR_STEREO_K=2.0 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[588515250][tid=26144] config: TEWVR_STEREO_C=0.98 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[588515250][tid=26144] stereo_afr: ON - alternate frames, k=2.0000 c=0.9800, flat (menu/HUD) draws kept mono; the eye flips at every Present
+[588515250][tid=26144] mvp_patch: installed (DrawIndexed=1 Draw=1 UpdateSubresource=1; CreateBuffer=1, diagnostics only); world cb0 buffers (1856-1984 bytes, DEFAULT/no-CPU-access) are registered FROM THE DRAW PATH the first time one is seen bound at VS slot 0 for a draw with a usable mvpmatrix, and their content is shadowed on every UpdateSubresource; deferred contexts get their own UpdateSubresource late-hooked on their first draw; scratch pool created lazily on the first patchable draw
+[588515265][tid=26144] hooks_install: resolved IDXGISwapChain::Present at 00007FFC502418C0
+[588515359][tid=26144] minhook_glue: hook installed and enabled: Present
+[588515375][tid=26144] hooks_install: Present hook active
+[588515375][tid=26144] config: TEWVR_OPENXR=1 (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[588515375][tid=26144] tew_xr: ON - loading the OpenXR runtime; eye output as a floating screen per eye
+[588515375][tid=26740] config: TEWVR_OPENXR_RUNTIME_JSON=D:\claude video game stuff\tools\OpenXR-Simulator\openxr_simulator.json (from D:\Program Files (x86)\Steam\steamapps\common\TheEvilWithin\tewvr.ini)
+[588515375][tid=26740] tew_xr: runtime for this game only: D:\claude video game stuff\tools\OpenXR-Simulator\openxr_simulator.json
+[588515546][tid=26740] tew_xr: runtime ready; the session starts at the next Present
+[588549937][tid=16688] mvptable: D3DReflect resolved from d3dcompiler_47.dll
+[588556484][tid=16892] mvp_patch: DIAG first pool-miss: a KNOWN/patchable shader's bound slot0 buf=00000262B50978F8 is not (yet) in the world cb0 pool (pool currently holds 0 identities). That buffer's real desc: ByteWidth=64 Usage=2 BindFlags=0x4 CPUAccessFlags=0x10000 MiscFlags=0x0 - to be registered it must be CONSTANT_BUFFER, Usage=DEFAULT(0), CPUAccessFlags=0 and 1856-1984 bytes (checked from the draw path by mvp_try_register_bound_buffer, NOT at CreateBuffer time). A miss here is expected and harmless for the small per-shader cb0s (64/96/128/160/176/224/272B) this mechanism does not cover
+[588556500][tid=16892] d3d_capture: captured real swap-chain 1280x720 format=28 (dev=00000262D91A6E48 ctx=00000262D8EC75B0 sc=00000262DDE164D0)
+[588556500][tid=16892] d3d_capture: d3d_capture_ready() == true
+[588557390][tid=16688] mvptable: no cb0 for hash=C1BD0EF24C067AE6 (D3DReflect failed, or this shader has none)
+[588557406][tid=16688] mvptable: no cb0 for hash=C989E1339BCD1117 (D3DReflect failed, or this shader has none)
+[588557500][tid=16688] mvptable: no cb0 for hash=A0F020C66375C6B2 (D3DReflect failed, or this shader has none)
+[588557593][tid=16688] mvptable: no cb0 for hash=3C24370B7C65641F (D3DReflect failed, or this shader has none)
+[588558375][tid=16688] mvptable: no cb0 for hash=9E0984DC44D6C261 (D3DReflect failed, or this shader has none)
+[588558671][tid=16688] mvptable: no cb0 for hash=84A15C5056FBD63F (D3DReflect failed, or this shader has none)
+[588558859][tid=16688] mvptable: no cb0 for hash=586E22D5F2C82124 (D3DReflect failed, or this shader has none)
+[588559015][tid=16688] mvptable: no cb0 for hash=3967EB68F8F0261F (D3DReflect failed, or this shader has none)
+[588559140][tid=16688] mvptable: no cb0 for hash=1C34F29230A2C64A (D3DReflect failed, or this shader has none)
+[588579859][tid=16892] hooks: game swap-chain 00000262DDE164D0 draws to window 00000000021D0700, title "The Evil Within", class "The Evil Within"; only it runs per-frame work
+[588579859][tid=16892] Present hook alive: frame 1
+[588580718][tid=16892] tew_xr: session created on the game's own device (eye images stay on the card); waiting for the runtime to start it
+[588582421][tid=16892] tew_xr: session running
+[588582421][tid=16892] tew_xr: capturing 1280x720 eye images, format 28, kept on the graphics card
+[588582671][tid=16892] tew_xr: two 1280x720 eye swapchains, format 29
+[588583437][tid=16892] tew_xr: screen placed at head height 1.70 m
+[588584781][tid=16892] mvptable: no cb0 for hash=529D6238D813A0A4 (D3DReflect failed, or this shader has none)
+[588584781][tid=16892] mvp_patch: DIAG last ~5000ms: patched=0 | skipped: not_installed=0 no_vs=0 shader_unknown=0 shader_no_mvp=0 shader_rows_incomplete=0 no_slot0_buf=0 pool_miss=1 bounds_fail=0 scratch_not_ready=0 scratch_alloc_fail=0 scratch_map_fail=0
+[588584781][tid=16892] mvp_patch: DIAG CreateBuffer coverage: total_calls_seen=1294 of which constant_buffers=1191 (recorded identities=1191, cap 2048); world cb0 pool holds 0; UpdateSubresource targets hooked=1, shadow writes=0 (partial-box=0), draws skipped for an empty shadow=0, cross-thread shadow writes=0, CONCURRENT shadow writes=0, draws skipped for a torn shadow=0, late-hooks after a shadow was already valid=0
+[588584781][tid=16892] hooks: Present from a swap-chain that is not the game's (000002630F41DF60, window 00000000002004A8, 1728x804) - passed straight through, no per-frame work (e.g. the OpenXR simulator's preview)
+[588585359][tid=16892] stereo_afr: 1 Present(s); next frame is the RIGHT eye; 0 flat draw(s) kept mono since last line
+[588587078][tid=16892] mvptable: no cb0 for hash=6DB9B6D5041A2651 (D3DReflect failed, or this shader has none)
+[588587203][tid=16892] tew_xr: 1 headset frames submitted
