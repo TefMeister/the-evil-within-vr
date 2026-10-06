@@ -826,3 +826,16 @@ two-stage menu exit. Music is muted through Options → Audio → Music Volume 0
   `[verified-live 2026-10-06, n=1]`. Escape pauses cutscenes; holding the right mouse button skips them `[reported]`
   (Tefa). Menu arrows need the extended-key flag; a resting mouse pointer moves the menu highlight (park it first);
   WM_CLOSE does not quit in gameplay or at the title on this run — use Exit → Yes.
+
+### ✅ CORRECTION 2026-10-06 (evening): the Chapter 1 street DOES tilt — Tefa's eyes, in the running game
+
+Supersedes: the "Chapter 1 street outside the asylum: the world stays level" line of the 2026-09-30 section, and the
+"street still renders level" reading of the 2026-10-06 drawtrace section.
+
+Tefa watched the street live with `TEST_ROLL = 15` (walking and turning) and reports **everything tilted so far**
+`[verified-live 2026-10-06, n=1, Tefa's observation]`. Both earlier "level" verdicts came from screenshots judged by
+the session, where a whole scene leaning together has no level reference to compare against. That is consistent
+with the drawtrace (100% of visible work patched, right matrix) and with the 97% counters: there was never a gap
+to explain. **Lesson:** a uniform roll of the whole frame is the one change a single screenshot cannot show; judge it
+live, or compare against something known to stay level (the HUD, a menu) in the same picture. The "ghost copies"
+seen on 2026-09-30 are unexplained and may have been rain/reflection or a pause-menu frame; not pursued.
