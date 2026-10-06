@@ -802,3 +802,27 @@ gameplay reached `[verified-live 2026-09-30, n=1]`. On `stereo-6dof-core` as `c1
 and the window closes cleanly in about 4 s through WM_CLOSE (like clicking its X), far quicker than the
 two-stage menu exit. Music is muted through Options → Audio → Music Volume 0, which saves as
 `s_volume_music "-60"`; adding `s_playMusic "0"` to the config does not survive, the game rewrites the file.
+
+## 2026-10-06: the street drawtrace (`/lm`, dev PC) — every visible draw is patched, the street still renders level
+
+- **New instrument `TEWVR_DRAWTRACE`** (reader-built, `winmm.dll` `acb505868ccd`, source + `analyse_drawtrace.py` in
+  `staging/the-evil-within-vr/reader-seqdump-2026-10-06/`): per draw — ctx, VS hash, PS/GS/HS/DS, topology, RT/DSV,
+  target size/format and **why** the patch did or did not apply; also hooks the five draw variants `mvp_patch` never
+  examines (`DrawIndexedInstanced`, `DrawInstanced`, both indirect, `DrawAuto`) plus `ExecuteCommandList` /
+  `FinishCommandList`. Armed by `%LOCALAPPDATA%\TEWVR\drawtrace.txt` `[compile-verified 2026-10-06]`, works live
+  `[verified-live 2026-10-06, n=1]`. The old `SEQDUMP` cannot run beside the patch (its hooks collide) `[inferred-static 2026-10-06]`.
+- **Street, frame 11880 (TEST_ROLL=15):** 7,843 draws; PATCHED_POOL 93.2% of work, PATCHED_DYN 6.8%, SHADER_NO_MVP
+  94 tiny draws. **Zero** instanced/indirect draws, **zero** HS/DS, **zero** meshes drawn both patched and unpatched.
+  Same-frame grab: street level `[verified-live 2026-10-06, n=1 frame]`. Rules out causes (a) unpatched shaders,
+  (b) unpatched redraw, (c) tessellation, (e) unexamined draw calls, for this frame.
+- **(f) wrong matrix ruled out:** top 12 VS by work (91%): the patched rows are the SV_Position transform in every
+  one (rows 32–80 → `cb0[2..5]`; foliage rows 192–240 → `cb0[12..15]`); no previous-frame/velocity matrix anywhere
+  `[inferred-static 2026-10-06]`.
+- **(d) temporal composite unlikely:** in-game Motion Blur is DISABLED, anti-aliasing is MLAA (single-frame)
+  `[verified-live 2026-10-06]`.
+- **Open:** replayed command lists (two executed lists were finished before arming; a multi-frame trace decides),
+  a cached/pre-rendered layer the street reuses (virtual textures), or the edit landing after the GPU copy. `[hypothesis]`
+- **Automation:** the ViGEm pad **walks the character** (left stick 2 s → clear forward movement on the street)
+  `[verified-live 2026-10-06, n=1]`. Escape pauses cutscenes; holding the right mouse button skips them `[reported]`
+  (Tefa). Menu arrows need the extended-key flag; a resting mouse pointer moves the menu highlight (park it first);
+  WM_CLOSE does not quit in gameplay or at the title on this run — use Exit → Yes.
