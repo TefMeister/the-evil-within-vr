@@ -839,3 +839,20 @@ with the drawtrace (100% of visible work patched, right matrix) and with the 97%
 to explain. **Lesson:** a uniform roll of the whole frame is the one change a single screenshot cannot show; judge it
 live, or compare against something known to stay level (the HUD, a menu) in the same picture. The "ghost copies"
 seen on 2026-09-30 are unexplained and may have been rain/reflection or a pause-menu frame; not pursued.
+
+## 2026-10-06 (night, `/pd`, no launch): alternate-frame stereo built on the proven patch
+
+Branch `stereo-6dof-core` `e19f0fc`, `winmm.dll` `650b008b4402` deployed on the dev PC, off by default.
+
+- **Shape:** one frame per eye, the eye flipped at every `Present` (`hooks.c`), by swapping the matrix the patch
+  left-multiplies onto every MVP. Two prebuilt matrices (`K_eye * K_test`) swapped with `InterlockedExchangePointer`,
+  so no draw on a worker thread reads a half-written matrix (`stereo_afr.c`).
+- **Eye matrix, clip space, no projection knowledge needed:** `x' = x + s*k*(z - c*w)`. With `z = A*w + B` that is
+  `x'/w = x/w + s*k*B/w + s*k*(A - c)`: depth-falling parallax plus a constant convergence term set by `c`
+  `[verified-numerically 2026-10-06, n=10,001 checks]` (`tools/stereo_k_test.c`; a planted sign flip fails 4,000).
+  Knobs: `STEREO = 1`, `STEREO_K` (default 0.02), `STEREO_C` (default 1.0). Reversed-Z depth would reverse which
+  way near things pop: flip `STEREO_K`'s sign. Existing tests: `test_k` 12/12, `map_pairing` 17/17; 180 exports
+  `[compile-verified 2026-10-06]`. **Not run.**
+- **Risks to watch live:** command lists recorded for frame N+1 while frame N presents would carry the wrong eye
+  (§7 "Map-time stereo" parked note; the draw-time pool path is unaffected); motion vectors / TAA history see the
+  eye jump every frame. The drawtrace build was replaced by this one (kept in `staging/the-evil-within-vr/`).
