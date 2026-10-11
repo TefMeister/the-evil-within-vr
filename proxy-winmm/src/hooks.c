@@ -142,6 +142,10 @@ static Present_t capture_present_via_dummy_swapchain(void) {
     D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_11_0;
     HRESULT hr;
     Present_t present = NULL;
+    /* 2026-10-11: our own hidden window. On the home PC the desktop window started failing with
+     * E_ACCESSDENIED (0x80070005), which left the whole mod flat; the desktop is now only a fallback. */
+    HWND wnd = CreateWindowExA(0, "STATIC", "tewvr-dummy", WS_OVERLAPPED, 0, 0, 8, 8,
+                               NULL, NULL, GetModuleHandleA(NULL), NULL);
 
     ZeroMemory(&scd, sizeof(scd));
     scd.BufferCount = 1;
@@ -149,7 +153,7 @@ static Present_t capture_present_via_dummy_swapchain(void) {
     scd.BufferDesc.Height = 1;
     scd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    scd.OutputWindow = GetDesktopWindow(); /* transient; never presented */
+    scd.OutputWindow = wnd ? wnd : GetDesktopWindow(); /* transient; never presented or shown */
     scd.SampleDesc.Count = 1;
     scd.Windowed = TRUE;
 
@@ -201,6 +205,7 @@ cleanup:
     if (sc)  IDXGISwapChain_Release(sc);
     if (ctx) ID3D11DeviceContext_Release(ctx);
     if (dev) ID3D11Device_Release(dev);
+    if (wnd) DestroyWindow(wnd);
 
     return present;
 }
