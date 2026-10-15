@@ -10,6 +10,8 @@
 #define HEAD_LENS_MAX_C      0.9f    /* off-centre terms beyond this are not a game camera */
 #define HEAD_LENS_MIN_A      0.5f
 #define HEAD_LENS_MAX_A      2.0f
+#define HEAD_PICK_MAX        64      /* most samples head_lens_pick_main looks at */
+#define HEAD_RECT_ASPECT_TOL  0.01f   /* picture and buffer shapes this close count as the same */
 
 static float dot3(const float *a, const float *b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 
@@ -40,6 +42,44 @@ int head_lens_from_mvp(const Mat4 *mvp, HeadLens *out) {
     if (!(a >= HEAD_LENS_MIN_A && a <= HEAD_LENS_MAX_A)) return 0;
     out->sx = sx; out->sy = sy; out->cx = cx; out->cy = cy; out->a = a;
     return 1;
+}
+
+static float aspect_of(const HeadLens *l) { return l->sy / l->sx; }
+
+static float median_sorted(float *v, int n) {   /* sorts v in place; n >= 1 */
+    int i, j;
+    for (i = 1; i < n; ++i) {
+        float t = v[i];
+        for (j = i; j > 0 && v[j - 1] > t; --j) v[j] = v[j - 1];
+        v[j] = t;
+    }
+    return v[n / 2];
+}
+
+static int in_group(const HeadLens *l, float centre, float tol) { return fabsf(aspect_of(l) - centre) <= tol * centre; }
+
+int head_lens_pick_main(const HeadLens *s, int n, float tol, HeadLens *out) {
+    float v[5][HEAD_PICK_MAX], centre;
+    int i, j, best = 0, best_count = 0, m = 0;
+    if (n <= 0) return 0;
+    if (n > HEAD_PICK_MAX) n = HEAD_PICK_MAX;
+    for (i = 0; i < n; ++i) {
+        int c = 0;
+        for (j = 0; j < n; ++j) c += in_group(&s[j], aspect_of(&s[i]), tol);
+        if (c > best_count) { best_count = c; best = i; }
+    }
+    centre = aspect_of(&s[best]);
+    for (j = 0; j < n; ++j) {
+        if (!in_group(&s[j], centre, tol)) continue;
+        v[0][m] = s[j].sx; v[1][m] = s[j].sy; v[2][m] = s[j].cx; v[3][m] = s[j].cy; v[4][m] = s[j].a;
+        ++m;
+    }
+    out->sx = median_sorted(v[0], m);
+    out->sy = median_sorted(v[1], m);
+    out->cx = median_sorted(v[2], m);
+    out->cy = median_sorted(v[3], m);
+    out->a = median_sorted(v[4], m);
+    return best_count;
 }
 
 void head_rot_from_xr_quat(float qx, float qy, float qz, float qw, HeadMat3 o) {
@@ -85,11 +125,11 @@ void head_lens_image_rect(const HeadLens *L, unsigned w, unsigned h, int rect[4]
     float bb = h ? (float)w / (float)h : 0.0f;
     rect[0] = 0; rect[1] = 0; rect[2] = (int)w; rect[3] = (int)h;
     if (!(vp > 0.0f) || !(bb > 0.0f)) return;
-    if (vp > bb * 1.01f) {                 /* wider than the buffer: bars top and bottom */
+    if (vp > bb * (1.0f + HEAD_RECT_ASPECT_TOL)) {                 /* wider than the buffer: bars top and bottom */
         int vh = (int)((float)w / vp + 0.5f);
         rect[1] = ((int)h - vh) / 2;
         rect[3] = vh;
-    } else if (vp < bb * 0.99f) {          /* narrower: bars left and right */
+    } else if (vp < bb * (1.0f - HEAD_RECT_ASPECT_TOL)) {          /* narrower: bars left and right */
         int vw = (int)((float)h * vp + 0.5f);
         rect[0] = ((int)w - vw) / 2;
         rect[2] = vw;

@@ -33,6 +33,10 @@ int head_track_other_camera(const Mat4 *mvp);
 /* Game thread, at Present: settles the lens from this frame's samples. Returns 1 once a lens has ever been measured. */
 int head_track_on_present(void);
 
+/* One log line: draws turned vs left alone as other cameras since the last call (stereo_afr calls it with its
+ * progress line). */
+void head_track_report(void);
+
 /* The settled lens (any thread; copied under a lock). 0 until one has been measured. */
 int head_track_lens(HeadLens *out);
 

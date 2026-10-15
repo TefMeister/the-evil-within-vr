@@ -54,6 +54,19 @@
 # Back-buffer capture to disk, triggered by creating %LOCALAPPDATA%\TEWVR\capture.txt.
 #FRAMECAPTURE = 1
 
+# --- two eyes (alternate frames), 2026-10-06; STEREO_C = auto added 2026-10-15 ---
+# One frame per eye, the eye flipping at every Present.
+#STEREO = 1
+# Depth strength. 2.0 was a test strength for seeing the split on a flat screen.
+#STEREO_K = 2.0
+# Where the two eyes meet. Keep it at auto (or 1): any other value pushes far-away
+# things apart in each eye, which a headset shows as two separate pictures
+# (0.98 with K = 2.0 did exactly that on 2026-10-11). auto follows the game's lens
+# each frame and needs HEADTRACK = 1; without it, auto behaves as 1.
+#STEREO_C = auto
+# Menus and HUD stay the same in both eyes (1, default) or get the eye shift (0).
+#STEREO_UI_MONO = 1
+
 # --- headset output (OpenXR), 2026-10-06 ---------------------------------------
 # Show the game in an OpenXR headset: one floating screen per eye, each eye seeing
 # only the frames drawn for it (use with STEREO = 1). Needs the 64-bit
