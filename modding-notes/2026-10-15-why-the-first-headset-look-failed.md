@@ -44,11 +44,19 @@ its lens shape differs by more than 3% from the "main" lens (`head_track_other_c
   lens changes by more than 1%; cutscenes zoom (printed every second on 2026-10-10), gameplay does not.
   `[inferred-static 2026-10-15]`
 
-## 3. "Controller did not work": open question
+## 3. "Controller did not work": the Xbox pad, so a fault (answered 2026-10-15)
 
-The mod maps nothing from the Quest controllers into the game; the game reads XInput (a real or virtual pad).
-So if Tefa meant the Quest controllers, that is expected and needs a feature; if an Xbox pad stopped working
-with the mod on, that is a fault. Asked.
+Tefa: *"the xbox controller, i didn't expect motion controllers to work"*. The game reads the pad through XInput
+(`XINPUT1_3`), and a virtual XInput pad drove it with the mod installed on 2026-09-08, so the proxy's forwarding is
+not the first suspect. Possibilities, none checked `[hypothesis]`:
+- **Focus:** the game ignores the pad when its window is not in front, and with the headset running something else
+  held focus (the headset app, or the 3440 x 1440 fullscreen window). This build already auto-minimises on focus loss.
+- **The headset side:** our OpenXR thread or the runtime taking the pad.
+- **Steam Input** remapping the pad for the headset session.
+
+**What tells them apart:** on the dev PC with the simulator (STEREO = 1, OPENXR = 1, HEADTRACK = 1, 1280 x 720 window),
+press the virtual pad in the pause menu with the game in front, then behind another window. Works in front, fails
+behind = focus. Fails in front too = the headset side; repeat with OPENXR = 0 to confirm.
 
 ## 4. "Frame rate poor (~22 per eye)": expected with this design
 
