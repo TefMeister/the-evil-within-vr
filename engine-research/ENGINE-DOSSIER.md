@@ -960,3 +960,16 @@ Folded from inbox `2026-10-06-lm-camera-angles.md`. Not needed urgently: big hea
   "no stereo strings" note; whether any code still uses it is unknown `[inferred-static 2026-10-06]`.
 - If the real camera is ever turned: set `K_head` to identity on those frames (no double turn), keep sending the
   headset the pose the frame was drawn with; expect the crosshair to leave screen centre.
+
+## 2026-10-15 (`/pd`, no launch): why the first headset look failed
+
+- **Convergence must equal the lens's A (1.0), never 0.98.** Far-away things split by `k*(A - c)` per eye
+  (`stereo_k_test`); K 2.0 / C 0.98 gives 2% of the picture width outward per eye, seen in a headset as two
+  pictures `[inferred-static 2026-10-15]`; the formula reproduces the 2026-10-06 far-facade split (51.2 vs 50 px)
+  `[verified-numerically 2026-10-15]`. `STEREO_C = auto` now follows A; other values warn in the log.
+- **The main lens is now the median of the biggest same-shape group of samples**, not a per-field median over
+  all samples, which can build a lens matching no camera when no camera holds a majority `[verified-numerically 2026-10-15]`
+  (head_pick_test). Whether that is what left the world flat and head-locked at 3440x1440 is a `[hypothesis]`;
+  the new per-progress-line count of turned vs left-alone draws decides it.
+- "Lens measured only once" in gameplay is the log rule (prints on >1% change), not a fault `[inferred-static 2026-10-15]`.
+- Note: `modding-notes/2026-10-15-why-the-first-headset-look-failed.md`.
