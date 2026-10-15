@@ -16,12 +16,13 @@ VR modding framework.
 > VR headset.** Until you see that update here, treat this as developer
 > work-in-progress, not something to play.
 
-**Status: pre-release, in active development — not VR-ready.** No playable
-release yet. The current sub-project is the *stereo 6DOF core* — rendering the
+**Status: in active development, not playable in VR yet.** A first VR build, 0.1.0 (2026-10-11), is on
+the [Releases page](https://github.com/TefMeister/the-evil-within-vr/releases) as a milestone, not for playing: it reaches
+the headset, but the 3D picture and head tracking still need fixing. The groundwork below is the *stereo 6DOF core* — rendering the
 game from two eye viewpoints per frame and presenting it side-by-side on a flat
 monitor, as the foundation for full VR support (head tracking and headset output
-come after that). Progress so far is the plumbing: a proxy DLL that loads into
-the game, Direct3D 11 hooks, and locating the camera matrices — no VR yet.
+come after that): a proxy DLL that loads into the game, Direct3D 11 hooks, and
+locating the camera matrices.
 
 This folder holds **only files we create** for the mod. No game files are
 included, and none ever will be — the mod requires you to own a legitimate copy
