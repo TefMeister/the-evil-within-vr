@@ -12,6 +12,7 @@
 #define STEREO_DEFAULT_C   1.0f    /* convergence: 1 = A for an infinite far plane, i.e. converge at infinity */
 #define STEREO_LOG_EVERY   600u    /* Presents between progress lines */
 #define STEREO_FLAT_EPS    1e-7f   /* row3 xyz must be this small next to row3 w to count as flat (exact 0 in practice) */
+#define STEREO_C_WARN      1e-4f   /* |c - 1| beyond this is warned about (see stereo_k_test: far split = k*(A-c)) */
 #define STEREO_HEAD_SLOTS  4       /* head-tracked K ring: a slot is rewritten 4 frames after it was current */
 
 static Mat4 g_k_mono;              /* the test K alone, used while stereo is off */
@@ -25,6 +26,8 @@ static const Mat4 *volatile g_k_cur = &g_k_mono;
 static int g_on;
 static int g_head;                 /* HEADTRACK = 1 */
 static int g_right;
+static int g_c_auto;               /* STEREO_C = auto: convergence = the lens's A each frame, so nothing far away splits */
+static float g_k_strength;
 static int g_ui_mono;              /* 1 (default): flat/orthographic draws (menus, HUD) keep g_k_mono */
 static volatile LONG g_flat_draws; /* flat draws kept mono since the last progress line */
 static unsigned long g_presents;
@@ -80,14 +83,26 @@ void stereo_afr_init(Mat4 test_k) {
     }
     k = read_knob("TEWVR_STEREO_K", STEREO_DEFAULT_K);
     c = read_knob("TEWVR_STEREO_C", STEREO_DEFAULT_C);
+    {
+        char buf[16];
+        DWORD n = tewvr_getenv("TEWVR_STEREO_C", buf, sizeof buf);
+        g_c_auto = n > 0 && n < sizeof buf && (buf[0] == 'a' || buf[0] == 'A');
+        if (g_c_auto) c = STEREO_DEFAULT_C;   /* until the lens is measured (needs HEADTRACK = 1) */
+    }
+    g_k_strength = k;
     g_k_eye_only[0] = stereo_eye_k(-1.0f, k, c);
     g_k_eye_only[1] = stereo_eye_k(+1.0f, k, c);
     g_k_eye[0] = mat4_mul(g_k_eye_only[0], test_k);
     g_k_eye[1] = mat4_mul(g_k_eye_only[1], test_k);
     g_right = 0;
     g_k_cur = &g_k_eye[0];
-    log_msg("stereo_afr: ON - alternate frames, k=%.4f c=%.4f, flat (menu/HUD) draws %s; the eye flips at every Present",
-            (double)k, (double)c, g_ui_mono ? "kept mono" : "get the eye shift too");
+    log_msg("stereo_afr: ON - alternate frames, k=%.4f c=%s%.4f, flat (menu/HUD) draws %s; the eye flips at every Present",
+            (double)k, g_c_auto ? "auto (the measured lens), until then " : "", (double)c,
+            g_ui_mono ? "kept mono" : "get the eye shift too");
+    if (!g_c_auto && fabsf(c - STEREO_DEFAULT_C) > STEREO_C_WARN)
+        log_msg("stereo_afr: WARNING c=%.4f is not 1: far-away things are pushed apart by %.4f screen widths in EACH "
+                "eye, which a headset shows as two pictures (use STEREO_C = auto, or 1)",
+                (double)c, (double)(0.5f * fabsf(k * (STEREO_DEFAULT_C - c))));
 }
 
 /* HEAD TRACKING: the next frame's K = K_eye * K_head * K_test, K_head built from the newest head pose and the lens
@@ -97,15 +112,17 @@ static void build_head_frame(void) {
     HeadMat3 r;
     Mat4 k_head = mat4_identity(), *slot;
     HeadQuat q = head_track_latest_pose();
+    Mat4 eye = g_k_eye_only[g_on ? g_right : 0];
     if (head_track_on_present() && head_track_lens(&lens)) {
         head_rot_from_xr_quat(q.x, q.y, q.z, q.w, r);
         k_head = head_k_build(&lens, r);
+        if (g_on && g_c_auto) eye = stereo_eye_k(g_right ? 1.0f : -1.0f, g_k_strength, lens.a);
     } else {
         q.x = q.y = q.z = 0.0f; q.w = 1.0f;     /* no lens yet: the picture is not turned, so say so */
     }
     g_head_slot = (g_head_slot + 1) % STEREO_HEAD_SLOTS;
     slot = &g_k_head_ring[g_head_slot];
-    *slot = mat4_mul(g_k_eye_only[g_on ? g_right : 0], mat4_mul(k_head, g_k_test));
+    *slot = mat4_mul(eye, mat4_mul(k_head, g_k_test));
     g_frame_pose = q;
     InterlockedExchangePointer((PVOID volatile *)&g_k_cur, (PVOID)slot);
 }
@@ -115,6 +132,7 @@ void stereo_afr_on_present(void) {
     if (g_on) g_right ^= 1;
     if (g_head) build_head_frame();
     else InterlockedExchangePointer((PVOID volatile *)&g_k_cur, (PVOID)&g_k_eye[g_right]);
+    if ((g_presents % STEREO_LOG_EVERY) == 0 && g_head) head_track_report();
     if ((g_presents++ % STEREO_LOG_EVERY) == 0)
         log_msg("stereo_afr: %lu Present(s); next frame is the %s eye; %ld flat draw(s) kept mono since last line",
                 g_presents, g_on ? (g_right ? "RIGHT" : "LEFT") : "ONLY", (long)InterlockedExchange(&g_flat_draws, 0));

@@ -28,6 +28,10 @@ static HeadLens g_lens, g_logged;
 static HeadQuat g_pose = { 0.0f, 0.0f, 0.0f, 1.0f };
 static volatile float g_main_aspect;         /* sy/sx of the settled lens, 0 until known (read lock-free per draw) */
 static volatile LONG g_other_draws;
+static volatile LONG g_world_since;           /* draws the main lens matched since the last report: turned + shifted */
+static volatile LONG g_other_since;           /* draws left alone as other cameras since the last report */
+static volatile float g_other_aspect_lo, g_other_aspect_hi;   /* their shapes (racy min/max, for the log only) */
+static int g_group_size;
 
 void head_track_init(void) {
     char buf[16];
@@ -49,19 +53,6 @@ void head_track_sample(const Mat4 *mvp) {
     InterlockedExchange(&g_busy, 0);
 }
 
-static int cmp_float(const void *a, const void *b) {
-    float x = *(const float *)a, y = *(const float *)b;
-    return (x > y) - (x < y);
-}
-
-static float median_of(const HeadLens *s, int n, size_t field) {
-    float v[HT_SAMPLES_MAX];
-    int i;
-    for (i = 0; i < n; ++i) v[i] = *(const float *)((const char *)&s[i] + field);
-    qsort(v, (size_t)n, sizeof v[0], cmp_float);
-    return v[n / 2];
-}
-
 int head_track_on_present(void) {
     HeadLens s[HT_SAMPLES_MAX], l;
     int n, have;
@@ -71,12 +62,7 @@ int head_track_on_present(void) {
     memcpy(s, g_samples, (size_t)n * sizeof s[0]);
     g_nsamples = 0;
     InterlockedExchange(&g_busy, 0);
-    if (n >= HT_SAMPLES_MIN) {
-        l.sx = median_of(s, n, offsetof(HeadLens, sx));
-        l.sy = median_of(s, n, offsetof(HeadLens, sy));
-        l.cx = median_of(s, n, offsetof(HeadLens, cx));
-        l.cy = median_of(s, n, offsetof(HeadLens, cy));
-        l.a = median_of(s, n, offsetof(HeadLens, a));
+    if (n >= HT_SAMPLES_MIN && (g_group_size = head_lens_pick_main(s, n, HT_OTHER_TOL, &l)) >= HT_SAMPLES_MIN) {
         EnterCriticalSection(&g_cs);
         g_lens = l;
         g_have_lens = 1;
@@ -84,8 +70,8 @@ int head_track_on_present(void) {
         g_main_aspect = l.sy / l.sx;
         if (fabsf(l.sx - g_logged.sx) > HT_LOG_CHANGE * l.sx || fabsf(l.sy - g_logged.sy) > HT_LOG_CHANGE * l.sy) {
             g_logged = l;
-            log_msg("head_track: lens sx=%.4f sy=%.4f cx=%.4f cy=%.4f A=%.5f (median of %d draws) = %.1f x %.1f deg, "
-                    "picture aspect %.3f", (double)l.sx, (double)l.sy, (double)l.cx, (double)l.cy, (double)l.a, n,
+            log_msg("head_track: lens sx=%.4f sy=%.4f cx=%.4f cy=%.4f A=%.5f (median of the %d draws in the biggest same-shape group) = %.1f x %.1f deg, "
+                    "picture aspect %.3f", (double)l.sx, (double)l.sy, (double)l.cx, (double)l.cy, (double)l.a, g_group_size,
                     2.0 * atan(1.0 / l.sx) * HT_RAD_TO_DEG, 2.0 * atan(1.0 / l.sy) * HT_RAD_TO_DEG,
                     (double)(l.sy / l.sx));
             log_msg("head_track: %ld draw(s) from other cameras (shadow maps etc.) left alone so far", (long)g_other_draws);
@@ -101,9 +87,30 @@ int head_track_other_camera(const Mat4 *mvp) {
     HeadLens l;
     float main = g_main_aspect;
     if (!(main > 0.0f) || !head_lens_from_mvp(mvp, &l)) return 0;
-    if (fabsf(l.sy / l.sx - main) <= HT_OTHER_TOL * main) return 0;
+    if (fabsf(l.sy / l.sx - main) <= HT_OTHER_TOL * main) {
+        InterlockedIncrement(&g_world_since);
+        return 0;
+    }
     InterlockedIncrement(&g_other_draws);
+    InterlockedIncrement(&g_other_since);
+    {
+        float asp = l.sy / l.sx;
+        if (g_other_aspect_lo == 0.0f || asp < g_other_aspect_lo) g_other_aspect_lo = asp;
+        if (asp > g_other_aspect_hi) g_other_aspect_hi = asp;
+    }
     return 1;
+}
+
+void head_track_report(void) {
+    LONG world, other;
+    float lo = g_other_aspect_lo, hi = g_other_aspect_hi;
+    if (!g_on) return;
+    world = InterlockedExchange(&g_world_since, 0);
+    other = InterlockedExchange(&g_other_since, 0);
+    g_other_aspect_lo = g_other_aspect_hi = 0.0f;
+    log_msg("head_track: since last line %ld draw(s) TURNED (main lens shape %.3f), %ld left alone as other cameras "
+            "(shapes %.3f..%.3f); in gameplay a big left-alone share means the world is not being turned",
+            (long)world, (double)g_main_aspect, (long)other, (double)lo, (double)hi);
 }
 
 int head_track_lens(HeadLens *out) {

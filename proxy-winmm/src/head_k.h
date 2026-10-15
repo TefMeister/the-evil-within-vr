@@ -36,6 +36,13 @@ typedef float HeadMat3[3][3];
  * model scale, sane values), else 0. */
 int head_lens_from_mvp(const Mat4 *mvp, HeadLens *out);
 
+/* THE MAIN CAMERA FROM A FRAME'S SAMPLES (2026-10-15, /pd). A frame can hold several perspective cameras with
+ * different shapes (sy/sx). When none of them holds a majority of the samples, taking the median of each field
+ * separately can build a lens that belongs to NO camera (tools/head_pick_test.c: 1,173 of 5,000 such frames), and every real world draw then looks like "another camera" (head_track_other_camera) and is left
+ * unturned and flat. So: the biggest group of samples whose shapes agree within tol (relative) is the main
+ * camera, and its lens is the per-field median of that group only. Returns the group size (0 when n is 0). */
+int head_lens_pick_main(const HeadLens *s, int n, float tol, HeadLens *out);
+
 /* Rotation (game view space) from an OpenXR orientation quaternion. Normalises; identity for a zero quaternion. */
 void head_rot_from_xr_quat(float qx, float qy, float qz, float qw, HeadMat3 out);
 
