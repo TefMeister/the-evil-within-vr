@@ -51,7 +51,7 @@ stays put.
 
 `winmm.dll` `5b3fbab74352` (355,328 B) and `tewvr.ini` with `TEST_YAW = 0`, `TEST_ROLL = 15`. The
 previous pair is backed up in `TheEvilWithin/_backup-2026-09-30-pd/`. Recorded in
-`deployed/the dev PC/`.
+`deployed/<dev PC>/`.
 
 ## What is NOT established
 
