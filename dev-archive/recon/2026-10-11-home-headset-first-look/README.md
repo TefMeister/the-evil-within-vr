@@ -1,6 +1,6 @@
 # 2026-10-11 home PC: Tefa's first look in the real headset
 
-Build `winmm.dll` faeaff947610 (b4ab740 line + own hidden window for the startup test device).
+Build `winmm.dll` faeaff947610 (b9c20fb line + own hidden window for the startup test device).
 Settings: STEREO=1 K=2.0 C=0.98, OPENXR=1, HEADTRACK=1. Game ran 3440x1440 (not the 1280x720 window).
 
 ## What Tefa saw (this is the observation)
