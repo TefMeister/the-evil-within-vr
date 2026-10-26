@@ -1,6 +1,8 @@
 # Research index
 
-**Last `/gr` pass: 2026-10-07 (estate sweep) — CHECK-IN.** Inbox empty; watch check only: no other Evil Within VR mod found (Jandusoft's 'Evil Inside VR' is an unrelated game). Nothing new.
+**Last `/gr` pass: 2026-10-26 (estate sweep) — CHECK-IN.** Inbox empty; watch check only: no other Evil Within VR mod found. Nothing new.
+
+_Previous: **Last `/gr` pass: 2026-10-07 (estate sweep) — CHECK-IN.** Inbox empty; watch check only: no other Evil Within VR mod found (Jandusoft's 'Evil Inside VR' is an unrelated game). Nothing new._
 
 _Previous: **Last `/gr` pass: 2026-10-04 (estate sweep, second pass) — CHECK-IN.** Inbox empty; board `OPEN` rows read: the Chapter 1 street tilt and the virtual-pad test, both launches. Nothing new._
 
