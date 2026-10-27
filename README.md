@@ -1,5 +1,11 @@
 # the-evil-within-vr
 
+> ### ⏸️ Paused (2026-10-27)
+>
+> **A VR mod for The Evil Within is being worked on** by someone else.
+>
+> Work on this project is paused. Everything here stays as it was for anyone who wants to read it.
+
 **The Evil Within** — a flat-to-VR modding project.
 
 Consolidated on 2026-08-30: each folder below used to be one of this project's
