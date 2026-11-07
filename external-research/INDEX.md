@@ -1,6 +1,8 @@
 # Research index
 
-**Last `/gr` pass: 2026-10-26 (estate sweep) — CHECK-IN.** Inbox empty; watch check only: no other Evil Within VR mod found. Nothing new.
+**Last `/gr` pass: 2026-11-07 (estate sweep) — CHECK-IN.** Inbox empty; watch check: one search found no public Evil Within VR mod (only the unrelated game Evil Inside VR). Nothing new.
+
+_Previous: **Last `/gr` pass: 2026-10-26 (estate sweep) — CHECK-IN.** Inbox empty; watch check only: no other Evil Within VR mod found. Nothing new._
 
 _Previous: **Last `/gr` pass: 2026-10-07 (estate sweep) — CHECK-IN.** Inbox empty; watch check only: no other Evil Within VR mod found (Jandusoft's 'Evil Inside VR' is an unrelated game). Nothing new._
 
