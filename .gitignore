@@ -32,3 +32,5 @@ build/
 # Local scratch / coordination
 .superpowers/
 *.log
+# saved captures are evidence, not build noise: a log under recon/ is kept (2026-11-10, evidence check)
+!dev-archive/recon/**/*.log
